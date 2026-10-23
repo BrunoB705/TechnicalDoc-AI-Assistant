@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+.ruff_cache/
+.coverage
+data/chroma/
+data/docs/*
+!data/docs/.gitkeep
+eval/reports/
+.postman/
+postman/
+docs/

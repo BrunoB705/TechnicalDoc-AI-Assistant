@@ -1,0 +1,2 @@
+El cache se invalida automaticamente cada 10 minutos.
+Para forzar la invalidacion se puede reiniciar el servicio.

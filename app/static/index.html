@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TechnicalDoc AI Assistant</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>TechnicalDoc AI Assistant</h1>
+    <span id="health" class="badge badge-unknown" title="Estado del backend">...</span>
+  </header>
+
+  <main class="layout">
+    <section class="panel chat" aria-label="Chat">
+      <div id="messages" class="messages" aria-live="polite">
+        <div class="empty" id="empty-hint">Hacé una pregunta sobre tus documentos indexados.</div>
+      </div>
+      <form id="ask-form" class="ask-form">
+        <textarea id="question" rows="2" minlength="3" maxlength="1000" required
+          placeholder="Escribí tu pregunta (Enter para enviar, Shift+Enter para salto de línea)"></textarea>
+        <label class="topk">k
+          <input id="top-k" type="number" min="1" max="10" placeholder="auto">
+        </label>
+        <button id="ask-btn" type="submit">Preguntar</button>
+      </form>
+    </section>
+
+    <aside class="panel docs" aria-label="Documentos">
+      <h2>Documentos <span id="docs-count" class="muted"></span></h2>
+      <form id="upload-form" class="upload-form">
+        <input id="file" type="file" accept=".md,.txt,.pdf" required>
+        <button type="submit" id="upload-btn">Subir</button>
+      </form>
+      <div id="upload-status" class="status" role="status"></div>
+      <ul id="docs-list" class="docs-list"></ul>
+    </aside>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
