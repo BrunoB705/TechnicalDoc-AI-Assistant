@@ -30,7 +30,7 @@ def test_create_and_list_conversations(conv_service):
 
 
 def test_record_turn_auto_titling_and_history(conv_service):
-    c = conv_service.create_conversation()
+    c = conv_service.create_conversation(kb_id="arquitectura")
     assert c.title == DEFAULT_CONVERSATION_TITLE
 
     conv_service.record_turn(
@@ -48,6 +48,7 @@ def test_record_turn_auto_titling_and_history(conv_service):
     detail = conv_service.get_conversation(c.id)
     assert detail.title == "¿Cómo funcionan los números binarios?"
     assert detail.last_kb_id == "arquitectura"
+    assert detail.knowledge_base_id == "arquitectura"
     assert detail.message_count == 2
     assert len(detail.messages) == 2
     assert detail.messages[0].role == "user"
@@ -60,6 +61,35 @@ def test_record_turn_auto_titling_and_history(conv_service):
         ("user", "¿Cómo funcionan los números binarios?"),
         ("assistant", "En binario se usan 0 y 1 [1]."),
     ]
+
+
+def test_record_turn_rejects_cross_kb(conv_service):
+    c = conv_service.create_conversation(title="Chat Ops", kb_id="ops")
+    with pytest.raises(
+        InvalidConversationError, match="pertenece a la base 'ops', no a 'general'"
+    ):
+        conv_service.record_turn(
+            conversation_id=c.id,
+            question="¿Pregunta cruzada?",
+            answer="Respuesta",
+            grounded=True,
+            kb_id="general",
+        )
+
+
+def test_get_recent_history_filters_by_kb_id(conv_service):
+    c = conv_service.create_conversation(title="Chat General", kb_id="general")
+    conv_service.record_turn(
+        conversation_id=c.id,
+        question="Pregunta 1",
+        answer="Respuesta 1",
+        grounded=True,
+        kb_id="general",
+    )
+    hist_gen = conv_service.get_recent_history(c.id, kb_id="general")
+    assert len(hist_gen) == 2
+    hist_ops = conv_service.get_recent_history(c.id, kb_id="ops")
+    assert len(hist_ops) == 0
 
 
 def test_sliding_window_limits_to_max_exchanges(conv_service):
