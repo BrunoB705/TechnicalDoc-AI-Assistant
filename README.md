@@ -4,7 +4,7 @@ Asistente RAG para documentación técnica (Markdown, TXT, PDF) con FastAPI, Lan
 
 ---
 
-## 📌 Estado del Proyecto: Fase 4 (MVP + Confiabilidad + Streaming SSE + Gestión de documentos + Frontend web)
+## 📌 Estado del Proyecto: Fase 7 (Evaluación Cuantitativa RAG + Multi-Knowledge Base + Robustez + Frontend web)
 
 - **Ingesta:** Soporta archivos `.md`, `.txt` y `.pdf`, extrayendo metadatos de secciones jerárquicas y números de página.
 - **Embeddings:** `intfloat/multilingual-e5-small` ejecutado localmente con HuggingFace (sin consumo de API).
@@ -13,6 +13,9 @@ Asistente RAG para documentación técnica (Markdown, TXT, PDF) con FastAPI, Lan
 - **Confiabilidad:** Validación y filtrado automático de citas (`[n]`), eliminación de fuentes alucinadas y rechazo por falta de evidencia (`NO_EVIDENCE` y umbral semántico).
 - **Streaming:** Respuestas token por token en tiempo real mediante Server-Sent Events (`POST /query/stream`).
 - **Frontend web:** Interfaz en `http://localhost:8000/` (HTML/CSS/JS sin frameworks) con chat en streaming, citas `[n]` clicables, fuentes y panel de documentos (subir/listar/borrar).
+- **Evaluación cuantitativa y calibración:** Dataset de 45 casos (`eval/dataset.jsonl`), corpus reproducible multi-KB (`eval/corpus/`) y runner `scripts/evaluate.py` con métricas Recall@k, MRR, Refusal Accuracy, Aislamiento entre KBs y barrido de hiperparámetros (`--calibrate`).
+- **Multi-Knowledge Base:** Catálogo persistente en SQLite (`data/catalog.sqlite3`), aislamiento estricto de ámbito por `knowledge_base_id`, migración automática a la base `general` y selector de base en la interfaz.
+- **Robustez de ingesta:** Upload leído en bloques de 64 KB con corte temprano (`413`), rollback atómico si la indexación falla, indexado por lotes y contrato SSE unificado (`end` siempre presente).
 - **Gestión de documentos:** Alta (upload), listado, detalle y baja de documentos vía API, con detección de duplicados por contenido.
 
 ---
@@ -119,6 +122,8 @@ uv run ruff check .
 - [x] **Fase 2.5**: Streaming en tiempo real vía Server-Sent Events (SSE).
 - [x] **Fase 3**: Gestión de documentos vía API (`POST/GET/DELETE /documents`).
 - [x] **Fase 4**: Frontend interactivo propio servido en FastAPI.
-- [ ] **Fase 5**: Evaluación de métricas RAG (Hit@k, MRR, calibración de umbrales).
-- [ ] **Fase 6**: Docker, seguridad de endpoints y CI con GitHub Actions.
-- [ ] **Fase 7**: Despliegue en la nube y documentación final de portfolio.
+- [x] **Fase 5**: Robustez de ingesta (upload en streaming, rollback atómico, indexado por lotes, contrato SSE unificado).
+- [x] **Fase 6**: Soporte multi-Knowledge Base (aislamiento y catálogo).
+- [x] **Fase 7**: Evaluación cuantitativa RAG (Recall@k, MRR, abstención, calibración de umbrales).
+- [ ] **Fase 8**: Reproducibilidad, CI/CD y contenerización (Docker, GitHub Actions, corpus demo).
+- [ ] **Fase 9**: Hardening para demo pública y portfolio.

@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     chroma_dir: Path = Path("data/chroma")
     collection_name: str = "techdocs"
     docs_dir: Path = Path("data/docs")
+    catalog_path: Path = Path("data/catalog.sqlite3")
+    default_kb_id: str = "general"
     max_upload_mb: int = 20
 
     chunk_size: int = 1000

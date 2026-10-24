@@ -30,12 +30,15 @@ def chunk_documents(docs: list[Document], chunk_size: int, chunk_overlap: int) -
             pieces = recursive.split_documents([doc])
         chunks.extend(p for p in pieces if p.page_content.strip())
 
-    counters: dict[str, int] = {}
+    counters: dict[tuple[str, str], int] = {}
     for c in chunks:
         did = c.metadata["doc_id"]
-        i = counters.get(did, 0)
-        counters[did] = i + 1
-        c.metadata["chunk_id"] = f"{did}:{i}"
+        kb_id = c.metadata.get("knowledge_base_id") or "general"
+        c.metadata["knowledge_base_id"] = kb_id
+        key = (kb_id, did)
+        i = counters.get(key, 0)
+        counters[key] = i + 1
+        c.metadata["chunk_id"] = f"{did}:{i}" if kb_id == "general" else f"{kb_id}:{did}:{i}"
         # Chroma solo acepta metadata escalar
         for k in ("h1", "h2", "h3"):
             c.metadata.pop(k, None)

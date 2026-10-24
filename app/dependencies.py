@@ -2,6 +2,7 @@ from functools import lru_cache
 
 from app.config import get_settings
 from app.documents.service import DocumentService
+from app.knowledge_bases.service import KnowledgeBaseService
 from app.rag.embeddings import get_embeddings
 from app.rag.llm import get_llm
 from app.rag.service import RAGService
@@ -9,13 +10,23 @@ from app.rag.vectorstore import get_vectorstore
 
 
 @lru_cache
+def get_knowledge_base_service() -> KnowledgeBaseService:
+    settings = get_settings()
+    vs = get_vectorstore(settings, get_embeddings(settings))
+    return KnowledgeBaseService(vs, settings)
+
+
+@lru_cache
 def get_rag_service() -> RAGService:
     settings = get_settings()
     vs = get_vectorstore(settings, get_embeddings(settings))
-    return RAGService(vs, get_llm(settings), settings)
+    kb_svc = get_knowledge_base_service()
+    return RAGService(vs, get_llm(settings), settings, kb_service=kb_svc)
 
 
 @lru_cache
 def get_document_service() -> DocumentService:
     settings = get_settings()
-    return DocumentService(get_vectorstore(settings, get_embeddings(settings)), settings)
+    vs = get_vectorstore(settings, get_embeddings(settings))
+    kb_svc = get_knowledge_base_service()
+    return DocumentService(vs, settings, kb_service=kb_svc)

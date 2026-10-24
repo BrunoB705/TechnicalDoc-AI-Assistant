@@ -20,7 +20,8 @@ _ERRORS = {
 def upload_document(
     file: UploadFile = File(...), service: DocumentService = Depends(get_document_service)
 ) -> DocumentResponse:
-    info = service.add_document(file.filename or "", file.file.read())
+    content = service.read_upload(file.file)
+    info = service.add_document(file.filename or "", content)
     return DocumentResponse(**asdict(info))
 
 

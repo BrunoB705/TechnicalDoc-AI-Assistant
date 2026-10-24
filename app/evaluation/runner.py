@@ -1,0 +1,350 @@
+import json
+import tempfile
+import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from langchain_chroma import Chroma
+from langchain_core.embeddings import Embeddings
+from langchain_core.language_models import BaseChatModel
+
+from app.config import Settings
+from app.evaluation.metrics import (
+    CaseOutcome,
+    EvalCase,
+    EvalSummary,
+    aggregate_outcomes,
+    compute_rank,
+)
+from app.ingestion.pipeline import ingest_directory
+from app.knowledge_bases.service import KnowledgeBaseService
+from app.rag.service import RAGService
+
+
+@dataclass
+class CalibrationEntry:
+    chunk_size: int
+    chunk_overlap: int
+    top_k: int
+    min_relevance: float
+    summary: EvalSummary
+
+
+def load_dataset(path: Path) -> list[EvalCase]:
+    cases: list[EvalCase] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        item = json.loads(raw)
+        cases.append(EvalCase(**item))
+    return cases
+
+
+def build_eval_index(
+    corpus_dir: Path,
+    embeddings: Embeddings,
+    work_dir: Path,
+    chunk_size: int = 1000,
+    chunk_overlap: int = 150,
+) -> tuple[Chroma, Settings, KnowledgeBaseService]:
+    """Indexa cada subcarpeta de corpus_dir como una Knowledge Base independiente."""
+    settings = Settings(
+        chroma_dir=work_dir / "chroma",
+        docs_dir=work_dir / "docs",
+        catalog_path=work_dir / "catalog.sqlite3",
+        collection_name=f"eval_{chunk_size}_{chunk_overlap}",
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        openai_api_key=None,
+    )
+    vs = Chroma(
+        collection_name=settings.collection_name,
+        embedding_function=embeddings,
+        persist_directory=str(settings.chroma_dir),
+        collection_metadata={"hnsw:space": "cosine"},
+    )
+    kb_svc = KnowledgeBaseService(vs, settings)
+    for sub in sorted(corpus_dir.iterdir()):
+        if sub.is_dir():
+            kb_id = sub.name
+            try:
+                kb_svc.get_knowledge_base(kb_id)
+            except Exception:
+                kb_svc.create_knowledge_base(name=kb_id.capitalize(), kb_id=kb_id)
+            ingest_directory(sub, vs, settings, knowledge_base_id=kb_id)
+    return vs, settings, kb_svc
+
+
+def evaluate_dataset(
+    cases: list[EvalCase],
+    vectorstore: Chroma,
+    settings: Settings,
+    kb_service: KnowledgeBaseService | None = None,
+    llm: BaseChatModel | None = None,
+    top_k: int | None = None,
+    min_relevance: float | None = None,
+) -> tuple[EvalSummary, list[CaseOutcome]]:
+    """Ejecuta todos los casos del dataset midiendo recuperación, abstención y aislamiento."""
+    k = top_k if top_k is not None else settings.top_k
+    threshold = min_relevance if min_relevance is not None else settings.min_relevance
+    eval_settings = settings.model_copy(update={"top_k": k, "min_relevance": threshold})
+
+    outcomes: list[CaseOutcome] = []
+    for case in cases:
+        t0 = time.perf_counter()
+        found = vectorstore.similarity_search_with_relevance_scores(
+            case.question,
+            k=k,
+            filter={"knowledge_base_id": case.knowledge_base_id},
+        )
+        retrieval_ms = (time.perf_counter() - t0) * 1000.0
+
+        kept = [(doc, score) for doc, score in found if score >= threshold]
+        retrieved_sources = [doc.metadata.get("source", "") for doc, _ in kept]
+        retrieved_kbs = [
+            doc.metadata.get("knowledge_base_id", "general") for doc, _ in found
+        ]
+        top_score = float(found[0][1]) if found else None
+
+        generation_ms = 0.0
+        abstained = len(kept) == 0
+
+        if llm is not None and not abstained:
+            rag = RAGService(vectorstore, llm, eval_settings, kb_service=kb_service)
+            t1 = time.perf_counter()
+            res = rag.answer(
+                case.question, top_k=k, knowledge_base_id=case.knowledge_base_id
+            )
+            generation_ms = (time.perf_counter() - t1) * 1000.0
+            abstained = not res.grounded
+
+        leaked = any(kb != case.knowledge_base_id for kb in retrieved_kbs)
+        rank = compute_rank(retrieved_sources, case.expected_source)
+
+        outcomes.append(
+            CaseOutcome(
+                case=case,
+                retrieved_sources=retrieved_sources,
+                retrieved_kbs=retrieved_kbs,
+                top_score=round(top_score, 4) if top_score is not None else None,
+                abstained=abstained,
+                retrieval_ms=round(retrieval_ms, 2),
+                generation_ms=round(generation_ms, 2),
+                rank=rank,
+                leaked_cross_kb=leaked,
+            )
+        )
+
+    return aggregate_outcomes(outcomes), outcomes
+
+
+def _outcomes_from_cached(
+    cases: list[EvalCase],
+    cached_hits: list[tuple[list[tuple], float]],
+    top_k: int,
+    threshold: float,
+) -> list[CaseOutcome]:
+    outcomes: list[CaseOutcome] = []
+    for case, (found_all, retrieval_ms) in zip(cases, cached_hits, strict=False):
+        found = found_all[:top_k]
+        kept = [(doc, score) for doc, score in found if score >= threshold]
+        retrieved_sources = [doc.metadata.get("source", "") for doc, _ in kept]
+        retrieved_kbs = [
+            doc.metadata.get("knowledge_base_id", "general") for doc, _ in found
+        ]
+        top_score = float(found[0][1]) if found else None
+        abstained = len(kept) == 0
+        leaked = any(kb != case.knowledge_base_id for kb in retrieved_kbs)
+        rank = compute_rank(retrieved_sources, case.expected_source)
+        outcomes.append(
+            CaseOutcome(
+                case=case,
+                retrieved_sources=retrieved_sources,
+                retrieved_kbs=retrieved_kbs,
+                top_score=round(top_score, 4) if top_score is not None else None,
+                abstained=abstained,
+                retrieval_ms=round(retrieval_ms, 2),
+                generation_ms=0.0,
+                rank=rank,
+                leaked_cross_kb=leaked,
+            )
+        )
+    return outcomes
+
+
+def calibrate_grid(
+    cases: list[EvalCase],
+    corpus_dir: Path,
+    embeddings: Embeddings,
+    chunk_sizes: tuple[int, ...] = (500, 1000),
+    top_ks: tuple[int, ...] = (3, 4, 6),
+    thresholds: tuple[float, ...] = (0.35, 0.75, 0.80, 0.82, 0.837, 0.85),
+) -> list[CalibrationEntry]:
+    """Compara configuraciones de chunk_size, top_k y min_relevance y las ordena por score."""
+    results: list[CalibrationEntry] = []
+    max_k = max(top_ks)
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        base_dir = Path(tmp)
+        for csize in chunk_sizes:
+            overlap = max(50, int(csize * 0.15))
+            vs, _, _ = build_eval_index(
+                corpus_dir,
+                embeddings,
+                base_dir / f"cs_{csize}",
+                chunk_size=csize,
+                chunk_overlap=overlap,
+            )
+            cached: list[tuple[list[tuple], float]] = []
+            for case in cases:
+                t0 = time.perf_counter()
+                found = vs.similarity_search_with_relevance_scores(
+                    case.question,
+                    k=max_k,
+                    filter={"knowledge_base_id": case.knowledge_base_id},
+                )
+                ms = (time.perf_counter() - t0) * 1000.0
+                cached.append((found, ms))
+
+            for k in top_ks:
+                for thr in thresholds:
+                    outcomes = _outcomes_from_cached(cases, cached, top_k=k, threshold=thr)
+                    summary = aggregate_outcomes(outcomes)
+                    results.append(
+                        CalibrationEntry(
+                            chunk_size=csize,
+                            chunk_overlap=overlap,
+                            top_k=k,
+                            min_relevance=thr,
+                            summary=summary,
+                        )
+                    )
+    return sorted(
+        results,
+        key=lambda r: (
+            r.summary.composite_score,
+            r.summary.recall_at_k,
+            r.summary.refusal_accuracy,
+            r.summary.mrr,
+        ),
+        reverse=True,
+    )
+
+
+def format_markdown_report(
+    baseline: EvalSummary,
+    outcomes: list[CaseOutcome],
+    calibration: list[CalibrationEntry] | None = None,
+    config_params: dict | None = None,
+) -> str:
+    cfg = config_params or {}
+    lines = [
+        "# Informe de Evaluación Cuantitativa y Calibración RAG",
+        "",
+        "## 1. Configuración Evaluada",
+        f"- **Casos totales**: `{baseline.total_cases}` "
+        f"(`{baseline.positive_cases}` positivos, `{baseline.abstention_cases}` de abstención)",
+        f"- **Parámetros activos**: `chunk_size={cfg.get('chunk_size', 1000)}`, "
+        f"`top_k={cfg.get('top_k', 4)}`, `min_relevance={cfg.get('min_relevance', 0.35)}`",
+        "",
+        "## 2. Métricas Principales",
+        "",
+        "| Métrica | Valor | Descripción |",
+        "|---|---|---|",
+        f"| **Recall@k (Hit@k)** | `{baseline.recall_at_k:.2%}` | "
+        "% de preguntas positivas con el documento esperado en top-k |",
+        f"| **MRR** | `{baseline.mrr:.4f}` | "
+        "Mean Reciprocal Rank del documento fuente esperado |",
+        f"| **Refusal Accuracy** | `{baseline.refusal_accuracy:.2%}` | "
+        "Tasa global de abstención correcta (negativas + cross-KB) |",
+        f"| **Abstención Negativas** | `{baseline.negative_refusal_rate:.2%}` | "
+        "Rechazo en preguntas fuera de dominio |",
+        f"| **Abstención Cross-KB** | `{baseline.cross_kb_refusal_rate:.2%}` | "
+        "Rechazo cuando la evidencia reside en otra Knowledge Base |",
+        f"| **Falsas Abstenciones** | `{baseline.false_abstention_rate:.2%}` | "
+        "Preguntas con evidencia que fueron rechazadas por el umbral |",
+        f"| **Aislamiento entre KBs** | `{baseline.isolation_rate:.2%}` | "
+        "Consultas sin ningún chunk filtrado desde una KB ajena |",
+        f"| **Latencia Recuperación (media / p95)** | "
+        f"`{baseline.avg_retrieval_ms:.2f} ms` / `{baseline.p95_retrieval_ms:.2f} ms` | "
+        "Búsqueda vectorial filtrada en ChromaDB |",
+        f"| **Puntaje Compuesto** | `{baseline.composite_score:.4f}` | "
+        "45% Recall@k + 25% MRR + 30% Refusal Accuracy |",
+        "",
+    ]
+
+    if calibration:
+        lines.extend(
+            [
+                "## 3. Calibración Empírica (`chunk_size` × `top_k` × `min_relevance`)",
+                "",
+                "| Rank | `chunk_size` | `top_k` | `min_relevance` | Recall@k | MRR | "
+                "Refusal Acc. | Isolation | Score |",
+                "|---|---|---|---|---|---|---|---|---|",
+            ]
+        )
+        for idx, entry in enumerate(calibration[:12], start=1):
+            s = entry.summary
+            lines.append(
+                f"| {idx} | `{entry.chunk_size}` | `{entry.top_k}` | `{entry.min_relevance:.3f}` | "
+                f"`{s.recall_at_k:.2%}` | `{s.mrr:.4f}` | `{s.refusal_accuracy:.2%}` | "
+                f"`{s.isolation_rate:.2%}` | **{s.composite_score:.4f}** |"
+            )
+        lines.append("")
+
+    misses = [
+        o
+        for o in outcomes
+        if (not o.case.should_abstain and (o.abstained or o.rank is None))
+        or (o.case.should_abstain and not o.abstained)
+    ]
+    lines.append("## 4. Desglose de Casos Destacados / Desvíos")
+    lines.append("")
+    if not misses:
+        lines.append("- Todos los casos evaluados cumplieron el comportamiento esperado.")
+    else:
+        for o in misses[:10]:
+            lines.append(
+                f"- `{o.case.id}` (`{o.case.category}`, KB=`{o.case.knowledge_base_id}`, "
+                f"top_score=`{o.top_score}`): abstained=`{o.abstained}`, "
+                f"retrieved=`{o.retrieved_sources}`"
+            )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def serialize_report(
+    summary: EvalSummary,
+    outcomes: list[CaseOutcome],
+    calibration: list[CalibrationEntry] | None = None,
+) -> dict:
+    return {
+        "summary": asdict(summary),
+        "calibration_top": [
+            {
+                "chunk_size": c.chunk_size,
+                "chunk_overlap": c.chunk_overlap,
+                "top_k": c.top_k,
+                "min_relevance": c.min_relevance,
+                **asdict(c.summary),
+            }
+            for c in (calibration or [])[:15]
+        ],
+        "cases": [
+            {
+                "id": o.case.id,
+                "knowledge_base_id": o.case.knowledge_base_id,
+                "category": o.case.category,
+                "should_abstain": o.case.should_abstain,
+                "expected_source": o.case.expected_source,
+                "retrieved_sources": o.retrieved_sources,
+                "top_score": o.top_score,
+                "abstained": o.abstained,
+                "rank": o.rank,
+                "leaked_cross_kb": o.leaked_cross_kb,
+                "retrieval_ms": o.retrieval_ms,
+                "generation_ms": o.generation_ms,
+            }
+            for o in outcomes
+        ],
+    }

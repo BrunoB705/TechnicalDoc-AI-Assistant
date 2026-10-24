@@ -1,16 +1,4 @@
-import pytest
-
-from app.dependencies import get_document_service
-from app.documents.service import DocumentService
 from tests.conftest import make_pdf
-
-
-@pytest.fixture
-def docs_client(client, vectorstore, settings, tmp_path):
-    s = settings.model_copy(update={"docs_dir": tmp_path / "docs", "max_upload_mb": 1})
-    client.app.dependency_overrides[get_document_service] = lambda: DocumentService(vectorstore, s)
-    client.docs_dir = s.docs_dir
-    return client
 
 
 def upload(client, name, content, ctype="text/plain"):

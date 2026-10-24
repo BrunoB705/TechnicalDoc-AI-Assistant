@@ -8,14 +8,26 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>TechnicalDoc AI Assistant</h1>
-    <span id="health" class="badge badge-unknown" title="Estado del backend">...</span>
+    <div class="brand">
+      <h1>TechnicalDoc AI Assistant</h1>
+      <span id="health" class="badge badge-unknown" title="Estado del backend">...</span>
+    </div>
+    <div class="kb-controls">
+      <label for="kb-select" class="kb-label">Base activa:</label>
+      <select id="kb-select" aria-label="Base de conocimiento activa"></select>
+      <button id="new-kb-btn" type="button" class="secondary">+ Nueva KB</button>
+      <button id="del-kb-btn" type="button" class="danger" title="Eliminar base activa">Eliminar KB</button>
+    </div>
   </header>
 
   <main class="layout">
     <section class="panel chat" aria-label="Chat">
+      <div class="kb-banner">
+        Consultando ámbito exclusivo: <strong id="active-kb-name">General</strong>
+        <span id="active-kb-desc" class="muted"></span>
+      </div>
       <div id="messages" class="messages" aria-live="polite">
-        <div class="empty" id="empty-hint">Hacé una pregunta sobre tus documentos indexados.</div>
+        <div class="empty" id="empty-hint">Hacé una pregunta sobre los documentos de la base seleccionada.</div>
       </div>
       <form id="ask-form" class="ask-form">
         <textarea id="question" rows="2" minlength="3" maxlength="1000" required
@@ -28,7 +40,7 @@
     </section>
 
     <aside class="panel docs" aria-label="Documentos">
-      <h2>Documentos <span id="docs-count" class="muted"></span></h2>
+      <h2>Documentos en <span id="docs-kb-label">General</span> <span id="docs-count" class="muted"></span></h2>
       <form id="upload-form" class="upload-form">
         <input id="file" type="file" accept=".md,.txt,.pdf" required>
         <button type="submit" id="upload-btn">Subir</button>
@@ -37,6 +49,23 @@
       <ul id="docs-list" class="docs-list"></ul>
     </aside>
   </main>
+
+  <dialog id="kb-modal" class="modal">
+    <form id="kb-form" method="dialog">
+      <h3>Nueva Base de Conocimiento</h3>
+      <label>Nombre
+        <input id="kb-name" type="text" maxlength="80" required placeholder="Ej. Arquitectura de Computadoras">
+      </label>
+      <label>Descripción (opcional)
+        <input id="kb-desc" type="text" maxlength="300" placeholder="Apuntes y presentaciones de la cátedra">
+      </label>
+      <div id="kb-modal-error" class="status err"></div>
+      <div class="modal-actions">
+        <button type="button" id="kb-cancel" class="secondary">Cancelar</button>
+        <button type="submit">Crear base</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="/static/app.js"></script>
 </body>

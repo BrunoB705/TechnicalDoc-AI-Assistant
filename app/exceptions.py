@@ -11,7 +11,7 @@ class EmptyIndexError(RAGError):
 
 
 class DocumentNotFoundError(RAGError):
-    """El documento no existe en el ?ndice."""
+    """El documento no existe en el índice."""
 
 
 class DuplicateDocumentError(RAGError):
@@ -19,8 +19,20 @@ class DuplicateDocumentError(RAGError):
 
 
 class InvalidDocumentError(RAGError):
-    """El archivo subido no es v?lido (extensi?n, nombre o sin texto extra?ble)."""
+    """El archivo subido no es válido (extensión, nombre o sin texto extraíble)."""
 
 
 class DocumentTooLargeError(RAGError):
-    """El archivo supera el tama?o m?ximo permitido."""
+    """El archivo supera el tamaño máximo permitido."""
+
+
+class KnowledgeBaseNotFoundError(RAGError):
+    """La base de conocimiento solicitada no existe."""
+
+
+class DuplicateKnowledgeBaseError(RAGError):
+    """Ya existe una base de conocimiento con ese identificador o nombre."""
+
+
+class InvalidKnowledgeBaseError(RAGError):
+    """Operación o datos inválidos sobre una base de conocimiento."""
