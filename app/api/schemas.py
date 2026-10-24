@@ -43,6 +43,7 @@ class DocumentResponse(BaseModel):
     chunks: int
     pages: int | None = None
     knowledge_base_id: str = "general"
+    created_at: str = ""
 
 
 class DocumentListResponse(BaseModel):

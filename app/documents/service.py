@@ -1,5 +1,6 @@
 import hashlib
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
 
@@ -30,6 +31,7 @@ class DocumentInfo:
     chunks: int
     pages: int | None = None
     knowledge_base_id: str = "general"
+    created_at: str = ""
 
 
 class DocumentService:
@@ -73,21 +75,43 @@ class DocumentService:
         for m in metadatas:
             if not m or not self._matches_kb(m, kb_id):
                 continue
-            info = docs.setdefault(
-                m["doc_id"],
-                DocumentInfo(
-                    doc_id=m["doc_id"],
+            doc_id = m["doc_id"]
+            if doc_id not in docs:
+                created_at = m.get("created_at") or ""
+                if not created_at:
+                    file_path = self._kb_dir(kb_id) / m["source"]
+                    if not file_path.is_file():
+                        file_path = self._settings.docs_dir / m["source"]
+                    if file_path.is_file():
+                        try:
+                            mtime = file_path.stat().st_mtime
+                            created_at = datetime.fromtimestamp(mtime, tz=UTC).isoformat()
+                        except Exception:
+                            created_at = ""
+                docs[doc_id] = DocumentInfo(
+                    doc_id=doc_id,
                     source=m["source"],
                     title=m.get("title", m["source"]),
                     file_type=m.get("file_type", ""),
                     chunks=0,
                     knowledge_base_id=kb_id,
-                ),
-            )
+                    created_at=created_at,
+                )
+            info = docs[doc_id]
             info.chunks += 1
             if m.get("page") is not None:
                 info.pages = max(info.pages or 0, int(m["page"]))
-        return sorted(docs.values(), key=lambda d: d.source)
+
+        def _sort_key(d: DocumentInfo) -> tuple[float, str]:
+            ts = 0.0
+            if d.created_at:
+                try:
+                    ts = datetime.fromisoformat(d.created_at).timestamp()
+                except Exception:
+                    ts = 0.0
+            return (-ts, d.source.lower())
+
+        return sorted(docs.values(), key=_sort_key)
 
     def list_documents(self, knowledge_base_id: str | None = None) -> list[DocumentInfo]:
         kb_id = self._resolve_kb(knowledge_base_id)
