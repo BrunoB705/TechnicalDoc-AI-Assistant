@@ -44,7 +44,7 @@ def parse_sse(text: str) -> list[tuple[str, dict]]:
     return events
 
 
-def test_multi_turn_conversation_and_kb_switch_across_turns(settings, tmp_path):
+def test_cross_kb_query_in_same_conversation_is_rejected_with_422(settings, tmp_path):
     s = settings.model_copy(
         update={
             "chroma_dir": tmp_path / "conv_chroma",
@@ -67,8 +67,7 @@ def test_multi_turn_conversation_and_kb_switch_across_turns(settings, tmp_path):
             "En binario se usan 0 y 1 [1].",  # Turno 1 respuesta
             "¿Cómo se representan los números en base hexadecimal?",  # Turno 2 condensación
             "En hexadecimal se usan 0-9 y A-F [1].",  # Turno 2 respuesta
-            "¿Cómo se realiza el despliegue en docker?",  # Turno 3 condensación (cambio de KB)
-            "El despliegue en docker usa contenedores [1].",  # Turno 3 respuesta
+            "El despliegue en docker usa contenedores [1].",  # Turno en nueva conversación de Ops
         ]
     )
     rag_svc = RAGService(vs, llm, s, kb_service=kb_svc, conversation_service=conv_svc)
@@ -103,9 +102,11 @@ def test_multi_turn_conversation_and_kb_switch_across_turns(settings, tmp_path):
         },
     )
 
-    # Crear conversación
+    # Crear conversación vinculada implícitamente a 'general'
     conv = client.post("/conversations", json={}).json()
     conv_id = conv["id"]
+    assert conv["last_kb_id"] == "general"
+    assert conv["knowledge_base_id"] == "general"
 
     # Turno 1 en 'general'
     r1 = client.post(
@@ -135,8 +136,8 @@ def test_multi_turn_conversation_and_kb_switch_across_turns(settings, tmp_path):
     assert end2["grounded"] is True
     assert end2["conversation_id"] == conv_id
 
-    # Turno 3 cambiando de KB a 'ops' en la misma conversación
-    r3 = client.post(
+    # Turno 3 intentando consultar 'ops' usando la conversación vinculada a 'general' -> 422
+    r_bad = client.post(
         "/query",
         json={
             "question": "¿Y cómo se despliega eso en docker?",
@@ -144,15 +145,46 @@ def test_multi_turn_conversation_and_kb_switch_across_turns(settings, tmp_path):
             "conversation_id": conv_id,
         },
     )
-    assert r3.status_code == 200
-    assert r3.json()["grounded"] is True
-    assert r3.json()["knowledge_base_id"] == kb_ops
+    assert r_bad.status_code == 422
+    assert r_bad.json()["error"] == "invalid_conversation"
+    assert "pertenece a la base 'general'" in r_bad.json()["detail"]
 
-    # Verificar persistencia completa de la conversación
-    detail = client.get(f"/conversations/{conv_id}").json()
-    assert detail["last_kb_id"] == kb_ops
-    assert detail["message_count"] == 6
-    assert detail["messages"][4]["knowledge_base_id"] == kb_ops
+    # En streaming también debe ser rechazado inmediatamente con 422
+    r_bad_stream = client.post(
+        "/query/stream",
+        json={
+            "question": "¿Y cómo se despliega eso en docker?",
+            "knowledge_base_id": kb_ops,
+            "conversation_id": conv_id,
+        },
+    )
+    assert r_bad_stream.status_code == 422
+    assert r_bad_stream.json()["error"] == "invalid_conversation"
+
+    # Inferencia de KB: consulta sin knowledge_base_id explícito toma la KB de la conversación
+    r_inferred = client.post(
+        "/query",
+        json={
+            "question": "¿Cómo se representan los números en binario?",
+            "conversation_id": conv_id,
+        },
+    )
+    assert r_inferred.status_code == 200
+    assert r_inferred.json()["knowledge_base_id"] == "general"
+
+    # Para consultar 'ops', se debe iniciar una conversación vinculada a 'ops'
+    conv_ops = client.post("/conversations", json={"knowledge_base_id": kb_ops}).json()
+    assert conv_ops["knowledge_base_id"] == kb_ops
+    r_ops = client.post(
+        "/query",
+        json={
+            "question": "¿Y cómo se despliega eso en docker?",
+            "knowledge_base_id": kb_ops,
+            "conversation_id": conv_ops["id"],
+        },
+    )
+    assert r_ops.status_code == 200
+    assert r_ops.json()["knowledge_base_id"] == kb_ops
 
 
 def test_query_with_nonexistent_conversation_returns_404(client):
