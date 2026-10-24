@@ -13,6 +13,7 @@ let kbCatalog = [];
 let activeConversationId = null;
 let conversationsCatalog = [];
 let readOnlyMode = false;
+let isRetraining = false;
 let currentConversationMessages = [];
 let latestAnswer = "";
 let latestQuestion = "";
@@ -212,9 +213,9 @@ async function checkHealth() {
     readOnlyMode = Boolean(body.read_only_mode);
     badge.className = `badge ${ok ? "badge-ok" : "badge-down"}`;
     badge.textContent = ok ? (readOnlyMode ? "online · solo lectura" : "online") : "error";
-    $("new-kb-btn").disabled = readOnlyMode;
-    $("upload-btn").disabled = readOnlyMode;
-    $("file").disabled = readOnlyMode;
+    $("new-kb-btn").disabled = readOnlyMode || isRetraining;
+    $("upload-btn").disabled = readOnlyMode || isRetraining;
+    $("file").disabled = readOnlyMode || isRetraining;
     const newChatBtn = $("new-chat-btn");
     if (newChatBtn) newChatBtn.disabled = readOnlyMode;
     document.querySelectorAll(".conv-del-btn").forEach((btn) => {
@@ -237,7 +238,7 @@ function updateKbBanner() {
   $("active-kb-name").textContent = current.name;
   $("active-kb-desc").textContent = current.description ? `— ${current.description}` : "";
   $("docs-kb-label").textContent = current.name;
-  $("del-kb-btn").disabled = readOnlyMode || activeKbId === "general";
+  $("del-kb-btn").disabled = readOnlyMode || activeKbId === "general" || isRetraining;
 }
 
 async function loadKbs(selectedId) {
@@ -265,11 +266,16 @@ async function loadKbs(selectedId) {
 }
 
 kbSelect?.addEventListener("change", () => {
+  if (isRetraining) return;
+  const previousKbId = activeKbId;
   activeKbId = kbSelect.value;
   setStatus("");
   $("retrain-container").hidden = true;
   updateKbBanner();
   loadDocs();
+  if (previousKbId !== activeKbId && activeConversationId) {
+    startNewChat();
+  }
 });
 
 $("open-docs-modal-btn")?.addEventListener("click", () => {
@@ -314,7 +320,7 @@ $("kb-form")?.addEventListener("submit", async (ev) => {
 });
 
 $("del-kb-btn")?.addEventListener("click", async () => {
-  if (activeKbId === "general") return;
+  if (isRetraining || activeKbId === "general") return;
   const current = kbCatalog.find((k) => k.id === activeKbId);
   const label = current ? current.name : activeKbId;
   if (!confirm(`¿Eliminar la base "${label}" y todos sus documentos indexados?`)) return;
@@ -750,7 +756,7 @@ async function loadDocs() {
       info.appendChild(el("div", "doc-meta", `${d.file_type} · ${d.chunks} chunks${pages}`));
       const del = el("button", "danger", "Borrar");
       del.type = "button";
-      del.disabled = readOnlyMode;
+      del.disabled = readOnlyMode || isRetraining;
       del.addEventListener("click", () => deleteDoc(d));
       li.append(info, del);
       list.appendChild(li);
@@ -761,6 +767,7 @@ async function loadDocs() {
 }
 
 async function deleteDoc(d) {
+  if (isRetraining) return;
   if (!confirm(`¿Borrar "${d.source}" de la base "${activeKbId}"?`)) return;
   const url = `/knowledge-bases/${encodeURIComponent(activeKbId)}/documents/${encodeURIComponent(d.doc_id)}`;
   const r = await fetch(url, { method: "DELETE" });
@@ -866,12 +873,16 @@ function uploadWithRetrainingProgress(file, kbId) {
 
 $("upload-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  if (isRetraining) return;
   const fileInput = $("file");
   const file = fileInput.files[0];
   if (!file) return;
   const btn = $("upload-btn");
+  isRetraining = true;
   btn.disabled = true;
   fileInput.disabled = true;
+  $("del-kb-btn").disabled = true;
+  $("new-kb-btn").disabled = true;
   setStatus("");
   try {
     const d = await uploadWithRetrainingProgress(file, activeKbId);
@@ -887,8 +898,11 @@ $("upload-form").addEventListener("submit", async (ev) => {
   } catch (e) {
     setStatus(e.message, "err");
   } finally {
-    btn.disabled = false;
-    fileInput.disabled = false;
+    isRetraining = false;
+    btn.disabled = readOnlyMode;
+    fileInput.disabled = readOnlyMode;
+    $("new-kb-btn").disabled = readOnlyMode;
+    updateKbBanner();
     await loadKbs(activeKbId);
     await loadDocs();
   }
