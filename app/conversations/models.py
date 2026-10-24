@@ -24,6 +24,11 @@ class ConversationSummary:
     created_at: str
     updated_at: str
     message_count: int = 0
+    knowledge_base_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.knowledge_base_id:
+            self.knowledge_base_id = self.last_kb_id
 
 
 @dataclass
@@ -35,3 +40,8 @@ class ConversationDetail:
     updated_at: str
     message_count: int = 0
     messages: list[MessageRecord] = field(default_factory=list)
+    knowledge_base_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.knowledge_base_id:
+            self.knowledge_base_id = self.last_kb_id

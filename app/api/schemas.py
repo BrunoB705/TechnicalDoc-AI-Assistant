@@ -105,6 +105,7 @@ class ConversationSummaryResponse(BaseModel):
     id: str
     title: str
     last_kb_id: str = "general"
+    knowledge_base_id: str = "general"
     created_at: str
     updated_at: str
     message_count: int = 0

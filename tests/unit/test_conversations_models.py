@@ -21,6 +21,7 @@ def test_conversation_summary_instantiation():
     assert c.id == "conv-123"
     assert c.title == "Charla sobre binario"
     assert c.last_kb_id == "general"
+    assert c.knowledge_base_id == "general"
     assert c.message_count == 2
 
 
@@ -48,6 +49,7 @@ def test_conversation_detail_with_messages():
         message_count=1,
         messages=[msg],
     )
+    assert detail.knowledge_base_id == "general"
     assert len(detail.messages) == 1
     assert detail.messages[0].role == "user"
     assert detail.messages[0].content == "Hola"

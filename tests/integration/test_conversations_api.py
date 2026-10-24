@@ -29,6 +29,7 @@ def test_crud_conversations(conv_client):
     conv_id = created["id"]
     assert created["title"] == "Primer Chat"
     assert created["last_kb_id"] == "general"
+    assert created["knowledge_base_id"] == "general"
     assert created["message_count"] == 0
 
     # 2. Listar
@@ -36,6 +37,7 @@ def test_crud_conversations(conv_client):
     assert list_res.status_code == 200
     assert list_res.json()["total"] == 1
     assert list_res.json()["conversations"][0]["id"] == conv_id
+    assert list_res.json()["conversations"][0]["knowledge_base_id"] == "general"
 
     # 3. Registrar un turno y obtener detalle con mensajes y fuentes
     conv_svc.record_turn(
