@@ -38,6 +38,14 @@ class InvalidKnowledgeBaseError(RAGError):
     """Operación o datos inválidos sobre una base de conocimiento."""
 
 
+class ConversationNotFoundError(RAGError):
+    """La conversación solicitada no existe."""
+
+
+class InvalidConversationError(RAGError):
+    """Operación o datos inválidos sobre una conversación."""
+
+
 class ReadOnlyModeError(RAGError):
     """Operación de escritura bloqueada porque READ_ONLY_MODE está activo."""
 
