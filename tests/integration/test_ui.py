@@ -41,3 +41,22 @@ def test_app_js_handles_conversations_api(client):
     assert "/conversations" in js
     assert "activeConversationId" in js
 
+
+def test_ui_has_download_conversation_button(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    assert 'id="download-btn"' in html
+    assert "Descargar conversación (.txt)" in html
+
+
+def test_app_js_downloads_full_conversation_with_user_and_bot_prefixes(client):
+    r = client.get("/static/app.js")
+    assert r.status_code == 200
+    js = r.text
+    assert "formatConversationForDownload" in js
+    assert "USUARIO:" in js
+    assert "BOT:" in js
+    assert "currentConversationMessages" in js
+
+

@@ -13,6 +13,7 @@ let kbCatalog = [];
 let activeConversationId = null;
 let conversationsCatalog = [];
 let readOnlyMode = false;
+let currentConversationMessages = [];
 let latestAnswer = "";
 let latestQuestion = "";
 
@@ -151,20 +152,36 @@ function cleanAnswerForDownload(text) {
     .trim();
 }
 
-function getDownloadFilename(question) {
+/** Formatea los mensajes de la conversación con prefijos USUARIO: y BOT: para exportar a .txt */
+function formatConversationForDownload(messages) {
+  if (!messages || !messages.length) return "";
+  return messages
+    .map((m) => {
+      if (m.role === "user") {
+        const userContent = (m.content || "").trim();
+        return userContent ? `USUARIO: ${userContent}` : "USUARIO:";
+      } else {
+        const botContent = cleanAnswerForDownload(m.content || "");
+        return botContent ? `BOT: ${botContent}` : "BOT:";
+      }
+    })
+    .join("\n\n");
+}
+
+function getDownloadFilename(titleOrQuestion) {
   const now = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
-  if (question) {
-    const slug = question
-      .slice(0, 25)
+  if (titleOrQuestion) {
+    const slug = titleOrQuestion
+      .slice(0, 30)
       .toLowerCase()
       .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
-    if (slug) return `respuesta-${slug}-${stamp}.txt`;
+    if (slug) return `conversacion-${slug}-${stamp}.txt`;
   }
-  return `respuesta-${stamp}.txt`;
+  return `conversacion-${stamp}.txt`;
 }
 
 function downloadTextFile(filename, content) {
@@ -177,6 +194,12 @@ function downloadTextFile(filename, content) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+if (typeof window !== "undefined") {
+  window.cleanAnswerForDownload = cleanAnswerForDownload;
+  window.formatConversationForDownload = formatConversationForDownload;
+  window.getDownloadFilename = getDownloadFilename;
 }
 
 // ---------- salud ----------
@@ -348,6 +371,7 @@ async function loadConversations() {
 
 function startNewChat() {
   activeConversationId = null;
+  currentConversationMessages = [];
   renderConversationsList();
   messagesEl.replaceChildren(
     el("div", "empty", "Hacé una pregunta sobre los documentos de la base seleccionada.")
@@ -412,6 +436,7 @@ async function selectConversation(convId) {
     }
 
     messagesEl.replaceChildren();
+    currentConversationMessages = [];
     latestAnswer = "";
     latestQuestion = "";
     let lastUserQuestion = "";
@@ -425,8 +450,11 @@ async function selectConversation(convId) {
         if (m.role === "user") {
           lastUserQuestion = m.content || "";
           addUserMessage(lastUserQuestion);
+          currentConversationMessages.push({ role: "user", content: lastUserQuestion });
         } else if (m.role === "assistant") {
           renderHistoricalBotMessage(m);
+          const botText = (m.content || m.message || "").trim();
+          currentConversationMessages.push({ role: "bot", content: botText });
           if (m.grounded && m.content) {
             latestAnswer = m.content.trim();
             latestQuestion = lastUserQuestion;
@@ -434,7 +462,7 @@ async function selectConversation(convId) {
         }
       }
     }
-    if (downloadBtn) downloadBtn.disabled = !latestAnswer;
+    if (downloadBtn) downloadBtn.disabled = currentConversationMessages.length === 0;
     scrollDown();
   } catch (e) {
     console.error("No se pudo cargar la conversación:", e);
@@ -529,6 +557,7 @@ async function ask(question, topK) {
     }
     bubble.classList.add("error");
     textEl.textContent = message;
+    currentConversationMessages.push({ role: "bot", content: message });
   };
 
   try {
@@ -583,14 +612,18 @@ async function ask(question, topK) {
           activeConversationId = data.conversation_id;
         }
         const finalText = typeof data.answer === "string" && data.answer ? data.answer : answer;
+        let botText = "";
         if (!data.grounded) {
           bubble.classList.add("warn");
-          textEl.textContent = data.message || "No se pudo verificar la respuesta con los documentos.";
+          botText = data.message || "No se pudo verificar la respuesta con los documentos.";
+          textEl.textContent = botText;
         } else {
-          renderWithCitations(textEl, finalText.trim(), msgId);
-          latestAnswer = finalText.trim();
+          botText = finalText.trim();
+          renderWithCitations(textEl, botText, msgId);
+          latestAnswer = botText;
           latestQuestion = question;
         }
+        currentConversationMessages.push({ role: "bot", content: botText });
         const cited = data.sources || [];
         if (cited.length) {
           const box = el("div", "sources");
@@ -610,7 +643,9 @@ async function ask(question, topK) {
         extra.appendChild(el("div", "meta", `${secs} s · KB: ${kbSnapshot}`));
       } else if (event === "error") {
         bubble.classList.add(data.reason ? "warn" : "error");
-        textEl.textContent = data.message || data.detail || "Error al procesar la consulta.";
+        const errMsg = data.message || data.detail || "Error al procesar la consulta.";
+        textEl.textContent = errMsg;
+        currentConversationMessages.push({ role: "bot", content: errMsg });
       }
     });
     if (!textEl.textContent) textEl.textContent = "La respuesta llegó vacía.";
@@ -630,17 +665,20 @@ form.addEventListener("submit", async (ev) => {
   askBtn.disabled = true;
   if (downloadBtn) downloadBtn.disabled = true;
   addUserMessage(question);
+  currentConversationMessages.push({ role: "user", content: question });
   await ask(question, Number.isInteger(k) ? k : null);
   askBtn.disabled = false;
-  if (downloadBtn && latestAnswer) downloadBtn.disabled = false;
+  if (downloadBtn) downloadBtn.disabled = currentConversationMessages.length === 0;
   questionEl.focus();
 });
 
 downloadBtn?.addEventListener("click", () => {
-  if (!latestAnswer) return;
-  const cleanText = cleanAnswerForDownload(latestAnswer);
-  const filename = getDownloadFilename(latestQuestion);
-  downloadTextFile(filename, cleanText);
+  if (!currentConversationMessages.length) return;
+  const conversationText = formatConversationForDownload(currentConversationMessages);
+  const conv = conversationsCatalog.find((c) => c.id === activeConversationId);
+  const title = conv?.title || currentConversationMessages.find((m) => m.role === "user")?.content || "";
+  const filename = getDownloadFilename(title);
+  downloadTextFile(filename, conversationText);
 });
 
 questionEl.addEventListener("keydown", (ev) => {
