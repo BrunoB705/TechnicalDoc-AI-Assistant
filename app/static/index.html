@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TechnicalDoc AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=5">
+  <link rel="stylesheet" href="/static/style.css?v=6">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 </head>
 <body>
@@ -16,12 +16,19 @@
     <div class="kb-controls">
       <label for="kb-select" class="kb-label">Base activa:</label>
       <select id="kb-select" aria-label="Base de conocimiento activa"></select>
-      <button id="new-kb-btn" type="button" class="secondary">+ Nueva KB</button>
-      <button id="del-kb-btn" type="button" class="danger" title="Eliminar base activa">Eliminar KB</button>
+      <button id="open-docs-modal-btn" type="button" class="secondary">⚙ Gestionar KB y Documentos</button>
     </div>
   </header>
 
   <main class="layout">
+    <aside class="panel conversations-sidebar" aria-label="Conversaciones">
+      <div class="sidebar-header">
+        <h2>Conversaciones</h2>
+        <button id="new-chat-btn" type="button">+ Nuevo chat</button>
+      </div>
+      <ul id="conversations-list" class="conversations-list"></ul>
+    </aside>
+
     <section class="panel chat" aria-label="Chat">
       <div class="kb-banner">
         Consultando ámbito exclusivo: <strong id="active-kb-name">General</strong>
@@ -48,9 +55,19 @@
         </div>
       </form>
     </section>
+  </main>
 
-    <aside class="panel docs" aria-label="Documentos">
-      <h2>Documentos en <span id="docs-kb-label">General</span> <span id="docs-count" class="muted"></span></h2>
+  <dialog id="docs-modal" class="modal docs-modal">
+    <div class="docs-modal-header">
+      <h3>Gestión de Bases y Documentos</h3>
+      <button type="button" id="close-docs-modal-btn" class="secondary">Cerrar</button>
+    </div>
+    <div class="docs-kb-actions">
+      <button id="new-kb-btn" type="button" class="secondary">+ Nueva KB</button>
+      <button id="del-kb-btn" type="button" class="danger" title="Eliminar base activa">Eliminar KB activa</button>
+    </div>
+    <div class="docs-section">
+      <h4>Documentos en <span id="docs-kb-label">General</span> <span id="docs-count" class="muted"></span></h4>
       <form id="upload-form" class="upload-form">
         <input id="file" type="file" accept=".md,.txt,.pdf" required>
         <button type="submit" id="upload-btn">Subir</button>
@@ -68,8 +85,8 @@
       </div>
       <div id="upload-status" class="status" role="status"></div>
       <ul id="docs-list" class="docs-list"></ul>
-    </aside>
-  </main>
+    </div>
+  </dialog>
 
   <dialog id="kb-modal" class="modal">
     <form id="kb-form" method="dialog">
@@ -92,6 +109,6 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked-katex-extension/lib/index.umd.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
-  <script src="/static/app.js?v=6"></script>
+  <script src="/static/app.js?v=7"></script>
 </body>
 </html>

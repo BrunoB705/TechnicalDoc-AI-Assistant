@@ -20,3 +20,24 @@ def test_static_missing_asset_404(client):
 def test_api_routes_still_work_with_ui_mounted(client):
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/docs").status_code == 200
+
+
+def test_ui_has_conversations_sidebar_and_docs_modal(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    assert 'id="new-chat-btn"' in html
+    assert 'id="conversations-list"' in html
+    assert 'id="docs-modal"' in html
+    assert 'id="open-docs-modal-btn"' in html
+    assert 'id="upload-form"' in html
+    assert 'id="docs-list"' in html
+
+
+def test_app_js_handles_conversations_api(client):
+    r = client.get("/static/app.js")
+    assert r.status_code == 200
+    js = r.text
+    assert "/conversations" in js
+    assert "activeConversationId" in js
+
