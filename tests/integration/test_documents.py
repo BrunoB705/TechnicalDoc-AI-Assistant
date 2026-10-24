@@ -93,3 +93,27 @@ def test_documents_are_listed_from_newest_to_oldest(docs_client):
     i_segundo = sources.index("segundo.txt")
     i_primero = sources.index("primero.txt")
     assert i_tercero < i_segundo < i_primero
+
+
+def test_upload_reserved_filename_is_sanitized(docs_client):
+    r = upload(docs_client, "CON.txt", b"contenido reservado")
+    assert r.status_code == 201
+    assert r.json()["source"] == "doc_CON.txt"
+    assert (docs_client.docs_dir / "doc_CON.txt").exists()
+
+
+def test_documents_table_persists_in_sqlite(docs_client):
+    import sqlite3
+
+    upload(docs_client, "persistencia.txt", b"probando persistencia sqlite")
+    docs = docs_client.get("/documents").json()["documents"]
+    doc_ids = {d["doc_id"] for d in docs}
+
+    # Inspeccionar directamente la tabla documents en SQLite
+    from app.dependencies import get_document_service
+
+    svc = docs_client.app.dependency_overrides[get_document_service]()
+    with sqlite3.connect(svc._db_path) as conn:
+        rows = conn.execute("SELECT doc_id, source FROM documents").fetchall()
+        sqlite_ids = {r[0] for r in rows}
+        assert doc_ids == sqlite_ids

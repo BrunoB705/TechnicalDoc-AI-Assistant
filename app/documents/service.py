@@ -1,4 +1,6 @@
 import hashlib
+import re
+import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -7,6 +9,7 @@ from typing import BinaryIO
 from langchain_chroma import Chroma
 
 from app.config import Settings
+from app.documents.catalog import init_documents_table, sync_documents_catalog
 from app.exceptions import (
     DocumentNotFoundError,
     DocumentTooLargeError,
@@ -20,6 +23,28 @@ from app.ingestion.pipeline import ingest_file
 from app.knowledge_bases.service import KnowledgeBaseService
 
 UPLOAD_CHUNK_SIZE = 64 * 1024  # bytes leídos por iteración al recibir un upload
+
+_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def sanitize_filename(filename: str) -> str:
+    """Sanitiza el nombre contra traversal, nombres reservados y caracteres inválidos."""
+    name = Path(filename or "").name.strip()
+    if not name:
+        raise InvalidDocumentError("El archivo no tiene nombre.")
+    stem = Path(name).stem.upper()
+    if stem in _RESERVED_NAMES:
+        name = f"doc_{name}"
+    # Sanitizar caracteres prohibidos en sistemas Windows / POSIX
+    sanitized = re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", name)
+    return sanitized
 
 
 @dataclass
@@ -46,6 +71,18 @@ class DocumentService:
         self._vs = vectorstore
         self._settings = settings
         self._kb_service = kb_service
+        self._db_path = settings.catalog_path
+        with self._connect() as conn:
+            init_documents_table(conn)
+
+    def _connect(self) -> sqlite3.Connection:
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self._db_path, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
 
     @property
     def max_upload_bytes(self) -> int:
@@ -70,61 +107,61 @@ class DocumentService:
         doc_kb = meta.get("knowledge_base_id") or self._settings.default_kb_id
         return doc_kb == kb_id
 
-    def _group(self, metadatas: list[dict], kb_id: str) -> list[DocumentInfo]:
-        docs: dict[str, DocumentInfo] = {}
-        for m in metadatas:
-            if not m or not self._matches_kb(m, kb_id):
-                continue
-            doc_id = m["doc_id"]
-            if doc_id not in docs:
-                created_at = m.get("created_at") or ""
-                if not created_at:
-                    file_path = self._kb_dir(kb_id) / m["source"]
-                    if not file_path.is_file():
-                        file_path = self._settings.docs_dir / m["source"]
-                    if file_path.is_file():
-                        try:
-                            mtime = file_path.stat().st_mtime
-                            created_at = datetime.fromtimestamp(mtime, tz=UTC).isoformat()
-                        except Exception:
-                            created_at = ""
-                docs[doc_id] = DocumentInfo(
-                    doc_id=doc_id,
-                    source=m["source"],
-                    title=m.get("title", m["source"]),
-                    file_type=m.get("file_type", ""),
-                    chunks=0,
-                    knowledge_base_id=kb_id,
-                    created_at=created_at,
-                )
-            info = docs[doc_id]
-            info.chunks += 1
-            if m.get("page") is not None:
-                info.pages = max(info.pages or 0, int(m["page"]))
-
-        def _sort_key(d: DocumentInfo) -> tuple[float, str]:
-            ts = 0.0
-            if d.created_at:
-                try:
-                    ts = datetime.fromisoformat(d.created_at).timestamp()
-                except Exception:
-                    ts = 0.0
-            return (-ts, d.source.lower())
-
-        return sorted(docs.values(), key=_sort_key)
-
     def list_documents(self, knowledge_base_id: str | None = None) -> list[DocumentInfo]:
         kb_id = self._resolve_kb(knowledge_base_id)
-        metadatas = self._vs.get(include=["metadatas"]).get("metadatas") or []
-        return self._group(metadatas, kb_id)
+        with self._connect() as conn:
+            sync_documents_catalog(conn, self._vs, self._settings)
+            rows = conn.execute(
+                """
+                SELECT
+                    doc_id, knowledge_base_id, source, title, file_type, chunks, pages, created_at
+                FROM documents
+                WHERE knowledge_base_id = ?
+                ORDER BY created_at DESC, lower(source) ASC
+                """,
+                (kb_id,),
+            ).fetchall()
+            return [
+                DocumentInfo(
+                    doc_id=r["doc_id"],
+                    knowledge_base_id=r["knowledge_base_id"],
+                    source=r["source"],
+                    title=r["title"],
+                    file_type=r["file_type"],
+                    chunks=r["chunks"],
+                    pages=r["pages"],
+                    created_at=r["created_at"],
+                )
+                for r in rows
+            ]
 
     def get_document(self, doc_id: str, knowledge_base_id: str | None = None) -> DocumentInfo:
         kb_id = self._resolve_kb(knowledge_base_id)
-        res = self._vs.get(where={"doc_id": doc_id}, include=["metadatas"])
-        docs = self._group(res.get("metadatas") or [], kb_id)
-        if not docs:
-            raise DocumentNotFoundError(f"No existe el documento '{doc_id}' en la base '{kb_id}'.")
-        return docs[0]
+        with self._connect() as conn:
+            sync_documents_catalog(conn, self._vs, self._settings)
+            row = conn.execute(
+                """
+                SELECT
+                    doc_id, knowledge_base_id, source, title, file_type, chunks, pages, created_at
+                FROM documents
+                WHERE doc_id = ? AND knowledge_base_id = ?
+                """,
+                (doc_id, kb_id),
+            ).fetchone()
+            if not row:
+                raise DocumentNotFoundError(
+                    f"No existe el documento '{doc_id}' en la base '{kb_id}'."
+                )
+            return DocumentInfo(
+                doc_id=row["doc_id"],
+                knowledge_base_id=row["knowledge_base_id"],
+                source=row["source"],
+                title=row["title"],
+                file_type=row["file_type"],
+                chunks=row["chunks"],
+                pages=row["pages"],
+                created_at=row["created_at"],
+            )
 
     def _ids_for_kb(self, where: dict, kb_id: str) -> list[str]:
         res = self._vs.get(where=where, include=["metadatas"])
@@ -159,9 +196,7 @@ class DocumentService:
     ) -> DocumentInfo:
         self._check_writable()
         kb_id = self._resolve_kb(knowledge_base_id)
-        name = Path(filename or "").name
-        if not name:
-            raise InvalidDocumentError("El archivo no tiene nombre.")
+        name = sanitize_filename(filename)
         ext = Path(name).suffix.lower()
         if ext not in SUPPORTED_EXTENSIONS:
             raise InvalidDocumentError(
@@ -171,12 +206,15 @@ class DocumentService:
             raise self._too_large()
 
         doc_id = hashlib.sha256(content).hexdigest()[:16]
-        existing = self._vs.get(where={"doc_id": doc_id}, include=["metadatas"])
-        for m in existing.get("metadatas") or []:
-            if m and self._matches_kb(m, kb_id):
-                src = m["source"]
+        with self._connect() as conn:
+            sync_documents_catalog(conn, self._vs, self._settings)
+            dup = conn.execute(
+                "SELECT source FROM documents WHERE doc_id = ? AND knowledge_base_id = ?",
+                (doc_id, kb_id),
+            ).fetchone()
+            if dup:
                 raise DuplicateDocumentError(
-                    f"El contenido ya está indexado en la base '{kb_id}' como '{src}'."
+                    f"El contenido ya está indexado en la base '{kb_id}' como '{dup['source']}'."
                 )
 
         kb_dir = self._kb_dir(kb_id)
@@ -197,7 +235,56 @@ class DocumentService:
                 raise InvalidDocumentError("No se pudo extraer texto del archivo.")
             if old_ids:  # mismo nombre en la misma KB, contenido distinto: reemplaza anterior
                 self._vs.delete(ids=old_ids)
-            return self.get_document(doc_id, knowledge_base_id=kb_id)
+                with self._connect() as conn:
+                    conn.execute(
+                        "DELETE FROM documents WHERE source = ? AND knowledge_base_id = ?",
+                        (name, kb_id),
+                    )
+                    conn.commit()
+
+            # Extraer páginas si es PDF
+            pages = None
+            if ext == ".pdf":
+                res = self._vs.get(where={"doc_id": doc_id}, include=["metadatas"])
+                p_list = [
+                    int(m["page"])
+                    for m in (res.get("metadatas") or [])
+                    if m and m.get("page") is not None
+                ]
+                if p_list:
+                    pages = max(p_list)
+
+            now_str = datetime.now(UTC).isoformat()
+            doc_info = DocumentInfo(
+                doc_id=doc_id,
+                source=name,
+                title=Path(name).stem,
+                file_type=ext.lstrip("."),
+                chunks=n_chunks,
+                pages=pages,
+                knowledge_base_id=kb_id,
+                created_at=now_str,
+            )
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO documents
+                    (doc_id, knowledge_base_id, source, title, file_type, chunks, pages, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        doc_info.doc_id,
+                        doc_info.knowledge_base_id,
+                        doc_info.source,
+                        doc_info.title,
+                        doc_info.file_type,
+                        doc_info.chunks,
+                        doc_info.pages,
+                        doc_info.created_at,
+                    ),
+                )
+                conn.commit()
+            return doc_info
         except Exception as exc:
             self._rollback(doc_id, kb_id, target, backup)
             if isinstance(exc, RAGError):
@@ -210,6 +297,12 @@ class DocumentService:
             ids = self._ids_for_kb({"doc_id": doc_id}, kb_id)
             if ids:
                 self._vs.delete(ids=ids)
+            with self._connect() as conn:
+                conn.execute(
+                    "DELETE FROM documents WHERE doc_id = ? AND knowledge_base_id = ?",
+                    (doc_id, kb_id),
+                )
+                conn.commit()
         finally:
             if backup is None:
                 target.unlink(missing_ok=True)
@@ -224,6 +317,12 @@ class DocumentService:
         ids = self._ids_for_kb({"doc_id": doc_id}, kb_id)
         if ids:
             self._vs.delete(ids=ids)
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM documents WHERE doc_id = ? AND knowledge_base_id = ?",
+                (doc_id, kb_id),
+            )
+            conn.commit()
         kb_dir = self._kb_dir(kb_id).resolve()
         path = (kb_dir / info.source).resolve()
         if path.is_file() and path.is_relative_to(kb_dir):

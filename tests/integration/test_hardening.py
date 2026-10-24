@@ -145,3 +145,42 @@ def test_llm_error_does_not_leak_internal_details(client, vectorstore, settings)
     assert r.status_code == 503
     detail = r.json()["detail"]
     assert "10.0.0.42" not in detail and "sk-secret" not in detail
+
+
+def test_rate_limiter_respects_x_forwarded_for(client, vectorstore, settings):
+    reset_rate_limiter()
+    use_llm(
+        client,
+        vectorstore,
+        settings,
+        FakeListChatModel(responses=["ok [1]"] * 5),
+        rate_limit_per_minute=2,
+    )
+    # IP 1: agota su cuota de 2
+    assert (
+        client.post(
+            "/query", json={"question": "consulta 1"}, headers={"X-Forwarded-For": "1.1.1.1"}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/query", json={"question": "consulta 2"}, headers={"X-Forwarded-For": "1.1.1.1"}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/query", json={"question": "consulta 3"}, headers={"X-Forwarded-For": "1.1.1.1"}
+        ).status_code
+        == 429
+    )
+
+    # IP 2: tiene su propio límite independiente gracias a X-Forwarded-For
+    assert (
+        client.post(
+            "/query", json={"question": "consulta 1"}, headers={"X-Forwarded-For": "2.2.2.2"}
+        ).status_code
+        == 200
+    )
+    reset_rate_limiter()

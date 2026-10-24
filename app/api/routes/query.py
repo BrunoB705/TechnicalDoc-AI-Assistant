@@ -25,8 +25,25 @@ def check_rate_limit(request: Request, service: RAGService = Depends(get_rag_ser
     limit = service.settings.rate_limit_per_minute
     if limit <= 0:
         return
-    client_ip = request.client.host if request.client else "local"
+
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    elif request.client:
+        client_ip = request.client.host
+    else:
+        client_ip = "local"
+
     now = time.monotonic()
+
+    # Limpieza periódica si se acumulan muchas IPs inactivas
+    if len(_request_timestamps) > 1000:
+        stale = [
+            ip for ip, b in _request_timestamps.items() if not b or (now - b[-1]) > _WINDOW_SECONDS
+        ]
+        for ip in stale:
+            del _request_timestamps[ip]
+
     bucket = _request_timestamps[client_ip]
     while bucket and (now - bucket[0]) > _WINDOW_SECONDS:
         bucket.popleft()

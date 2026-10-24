@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from langchain_chroma import Chroma
 
 from app.config import Settings
+from app.documents.catalog import init_documents_table, sync_documents_catalog
 from app.exceptions import (
     DuplicateKnowledgeBaseError,
     InvalidKnowledgeBaseError,
@@ -58,6 +59,7 @@ class KnowledgeBaseService:
                 )
                 """
             )
+            init_documents_table(conn)
             default_id = self._settings.default_kb_id
             row = conn.execute(
                 "SELECT id FROM knowledge_bases WHERE id = ?", (default_id,)
@@ -101,20 +103,18 @@ class KnowledgeBaseService:
             self._vs._collection.update(ids=to_update_ids, metadatas=to_update_metas)
 
     def _stats_by_kb(self) -> dict[str, tuple[int, int]]:
-        """Devuelve {kb_id: (n_documents, n_chunks)} a partir de las metadatas en ChromaDB."""
-        default_id = self._settings.default_kb_id
-        metadatas = self._vs.get(include=["metadatas"]).get("metadatas") or []
-        doc_sets: dict[str, set[str]] = {}
-        chunk_counts: dict[str, int] = {}
-        for m in metadatas:
-            if not m:
-                continue
-            kb_id = m.get("knowledge_base_id") or default_id
-            chunk_counts[kb_id] = chunk_counts.get(kb_id, 0) + 1
-            if "doc_id" in m:
-                doc_sets.setdefault(kb_id, set()).add(m["doc_id"])
-        all_kbs = set(chunk_counts) | set(doc_sets)
-        return {k: (len(doc_sets.get(k, set())), chunk_counts.get(k, 0)) for k in all_kbs}
+        """Devuelve {kb_id: (n_documents, n_chunks)} a partir del catálogo indexado en SQLite."""
+        with self._connect() as conn:
+            sync_documents_catalog(conn, self._vs, self._settings)
+            rows = conn.execute(
+                """
+                SELECT
+                    knowledge_base_id, COUNT(doc_id) as n_docs, COALESCE(SUM(chunks), 0) as n_chunks
+                FROM documents
+                GROUP BY knowledge_base_id
+                """
+            ).fetchall()
+            return {r["knowledge_base_id"]: (r["n_docs"], r["n_chunks"]) for r in rows}
 
     def list_knowledge_bases(self) -> list[KnowledgeBase]:
         stats = self._stats_by_kb()
@@ -224,7 +224,8 @@ class KnowledgeBaseService:
         if kb_dir.is_dir() and kb_dir.is_relative_to(docs_root):
             shutil.rmtree(kb_dir, ignore_errors=True)
 
-        # 3. Eliminar registro del catálogo SQLite
+        # 3. Eliminar registro del catálogo SQLite y sus documentos asociados
         with self._connect() as conn:
+            conn.execute("DELETE FROM documents WHERE knowledge_base_id = ?", (kb_id,))
             conn.execute("DELETE FROM knowledge_bases WHERE id = ?", (kb_id,))
             conn.commit()
