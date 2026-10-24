@@ -8,6 +8,7 @@ __pycache__/
 data/chroma/
 data/docs/*
 !data/docs/.gitkeep
+data/demo_docs/
 eval/reports/
 data/catalog.sqlite3
 .postman/

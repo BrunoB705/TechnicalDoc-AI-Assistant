@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     catalog_path: Path = Path("data/catalog.sqlite3")
     default_kb_id: str = "general"
     max_upload_mb: int = 20
+    read_only_mode: bool = False
 
     chunk_size: int = 1000
     chunk_overlap: int = 150

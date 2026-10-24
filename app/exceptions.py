@@ -36,3 +36,7 @@ class DuplicateKnowledgeBaseError(RAGError):
 
 class InvalidKnowledgeBaseError(RAGError):
     """Operación o datos inválidos sobre una base de conocimiento."""
+
+
+class ReadOnlyModeError(RAGError):
+    """Operación de escritura bloqueada porque READ_ONLY_MODE está activo."""

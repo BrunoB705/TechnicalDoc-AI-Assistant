@@ -12,6 +12,7 @@ from app.exceptions import (
     DuplicateDocumentError,
     InvalidDocumentError,
     RAGError,
+    ReadOnlyModeError,
 )
 from app.ingestion.loaders import SUPPORTED_EXTENSIONS
 from app.ingestion.pipeline import ingest_file
@@ -113,8 +114,15 @@ class DocumentService:
             if m is not None and self._matches_kb(m, kb_id)
         ]
 
+    def _check_writable(self) -> None:
+        if self._settings.read_only_mode:
+            raise ReadOnlyModeError(
+                "El servicio está en modo de solo lectura (READ_ONLY_MODE=true)."
+            )
+
     # ---- alta ----
     def read_upload(self, stream: BinaryIO) -> bytes:
+        self._check_writable()
         """Lee un upload en bloques de 64 KB y corta apenas se supera el máximo permitido."""
         limit = self.max_upload_bytes
         buf = bytearray()
@@ -127,6 +135,7 @@ class DocumentService:
     def add_document(
         self, filename: str, content: bytes, knowledge_base_id: str | None = None
     ) -> DocumentInfo:
+        self._check_writable()
         kb_id = self._resolve_kb(knowledge_base_id)
         name = Path(filename or "").name
         if not name:
@@ -191,6 +200,7 @@ class DocumentService:
     def delete_document(
         self, doc_id: str, knowledge_base_id: str | None = None
     ) -> None:
+        self._check_writable()
         kb_id = self._resolve_kb(knowledge_base_id)
         info = self.get_document(doc_id, knowledge_base_id=kb_id)
         ids = self._ids_for_kb({"doc_id": doc_id}, kb_id)

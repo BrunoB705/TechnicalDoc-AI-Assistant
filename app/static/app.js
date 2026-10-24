@@ -9,6 +9,7 @@ const kbSelect = $("kb-select");
 
 let activeKbId = "general";
 let kbCatalog = [];
+let readOnlyMode = false;
 
 // ---------- utilidades ----------
 function el(tag, className, text) {
@@ -58,10 +59,16 @@ function sourceNode(s, msgId) {
 async function checkHealth() {
   const badge = $("health");
   try {
-    const r = await fetch("/health");
-    const ok = r.ok && (await r.json()).status === "ok";
+    const r = await fetch("/health/live");
+    const body = r.ok ? await r.json() : {};
+    const ok = r.ok && body.status === "ok";
+    readOnlyMode = Boolean(body.read_only_mode);
     badge.className = `badge ${ok ? "badge-ok" : "badge-down"}`;
-    badge.textContent = ok ? "online" : "error";
+    badge.textContent = ok ? (readOnlyMode ? "online · solo lectura" : "online") : "error";
+    $("new-kb-btn").disabled = readOnlyMode;
+    $("upload-btn").disabled = readOnlyMode;
+    $("file").disabled = readOnlyMode;
+    updateKbBanner();
   } catch {
     badge.className = "badge badge-down";
     badge.textContent = "offline";
@@ -78,7 +85,7 @@ function updateKbBanner() {
   $("active-kb-name").textContent = current.name;
   $("active-kb-desc").textContent = current.description ? `— ${current.description}` : "";
   $("docs-kb-label").textContent = current.name;
-  $("del-kb-btn").disabled = activeKbId === "general";
+  $("del-kb-btn").disabled = readOnlyMode || activeKbId === "general";
 }
 
 async function loadKbs(selectedId) {
@@ -338,6 +345,7 @@ async function loadDocs() {
       info.appendChild(el("div", "doc-meta", `${d.file_type} · ${d.chunks} chunks${pages}`));
       const del = el("button", "danger", "Borrar");
       del.type = "button";
+      del.disabled = readOnlyMode;
       del.addEventListener("click", () => deleteDoc(d));
       li.append(info, del);
       list.appendChild(li);

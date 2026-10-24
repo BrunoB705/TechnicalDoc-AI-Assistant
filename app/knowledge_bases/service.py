@@ -11,6 +11,7 @@ from app.exceptions import (
     DuplicateKnowledgeBaseError,
     InvalidKnowledgeBaseError,
     KnowledgeBaseNotFoundError,
+    ReadOnlyModeError,
 )
 from app.ingestion.loaders import SUPPORTED_EXTENSIONS
 from app.knowledge_bases.models import KnowledgeBase
@@ -159,9 +160,16 @@ class KnowledgeBaseService:
     def ensure_exists(self, kb_id: str) -> KnowledgeBase:
         return self.get_knowledge_base(kb_id)
 
+    def _check_writable(self) -> None:
+        if self._settings.read_only_mode:
+            raise ReadOnlyModeError(
+                "El servicio está en modo de solo lectura (READ_ONLY_MODE=true)."
+            )
+
     def create_knowledge_base(
         self, name: str, description: str = "", kb_id: str | None = None
     ) -> KnowledgeBase:
+        self._check_writable()
         clean_name = name.strip()
         if not clean_name:
             raise InvalidKnowledgeBaseError("El nombre de la base no puede estar vacío.")
@@ -199,6 +207,7 @@ class KnowledgeBaseService:
         )
 
     def delete_knowledge_base(self, kb_id: str) -> None:
+        self._check_writable()
         if kb_id == self._settings.default_kb_id:
             raise InvalidKnowledgeBaseError(
                 f"No se puede eliminar la base por defecto '{kb_id}'."
