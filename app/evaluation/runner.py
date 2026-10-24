@@ -16,6 +16,9 @@ from app.evaluation.metrics import (
     aggregate_outcomes,
     check_answer_correctness,
     check_citation_validity,
+    check_hint_progression,
+    check_numerical_correctness,
+    check_student_error_diagnosis,
     compute_rank,
 )
 from app.ingestion.pipeline import ingest_directory
@@ -119,12 +122,21 @@ def evaluate_dataset(
         cited_sources: list[str] | None = None
         answer_correct: bool | None = None
         citations_valid: bool | None = None
+        numerical_correct: bool | None = None
+        hint_valid: bool | None = None
+        diagnosis_correct: bool | None = None
 
         if llm is not None:
             if not abstained:
                 rag = RAGService(vectorstore, llm, eval_settings, kb_service=kb_service)
                 t1 = time.perf_counter()
-                res = rag.answer(case.question, top_k=k, knowledge_base_id=case.knowledge_base_id)
+                res = rag.answer(
+                    case.question,
+                    top_k=k,
+                    knowledge_base_id=case.knowledge_base_id,
+                    pedagogical_mode=case.pedagogical_mode,
+                    strict_mode=case.strict_mode,
+                )
                 generation_ms = (time.perf_counter() - t1) * 1000.0
                 abstained = not res.grounded
                 abstention_reason = res.reason
@@ -141,6 +153,19 @@ def evaluate_dataset(
                 citations_valid = (not abstained) and check_citation_validity(
                     cited_sources or [], case.expected_source
                 )
+                if case.expected_calculation:
+                    numerical_correct = (not abstained) and check_numerical_correctness(
+                        generated_answer, case.expected_calculation
+                    )
+                if case.forbidden_in_hints:
+                    hint_valid = check_hint_progression(
+                        generated_answer, case.forbidden_in_hints
+                    )
+                if case.pedagogical_mode == "check" and case.expected_answer:
+                    diag_terms = [t.strip() for t in case.expected_answer.split(",")]
+                    diagnosis_correct = (not abstained) and check_student_error_diagnosis(
+                        generated_answer, diag_terms
+                    )
             else:
                 answer_correct = abstained
                 citations_valid = abstained
@@ -165,6 +190,9 @@ def evaluate_dataset(
                 citations_valid=citations_valid,
                 abstention_reason=abstention_reason,
                 abstention_message=abstention_message,
+                numerical_correct=numerical_correct,
+                hint_valid=hint_valid,
+                diagnosis_correct=diagnosis_correct,
             )
         )
 
@@ -341,6 +369,49 @@ def format_markdown_report(
                 "",
             ]
         )
+
+    if any(
+        x is not None
+        for x in (
+            baseline.numerical_correctness_rate,
+            baseline.hint_progression_rate,
+            baseline.student_diagnosis_rate,
+            baseline.strict_abstention_accuracy,
+        )
+    ):
+        lines.extend(
+            [
+                "## 2.3 Métricas Pedagógicas del Modo Profesor",
+                "",
+                "| Métrica Pedagógica | Valor | Descripción |",
+                "|---|---|---|",
+            ]
+        )
+        if baseline.numerical_correctness_rate is not None:
+            lines.append(
+                f"| **Exactitud Numérica / Simbólica** | "
+                f"`{baseline.numerical_correctness_rate:.2%}` | "
+                "Precisión de cálculos, campos IEEE 754 y representaciones de bits |"
+            )
+        if baseline.hint_progression_rate is not None:
+            lines.append(
+                f"| **Calidad de Pistas Progresivas** | "
+                f"`{baseline.hint_progression_rate:.2%}` | "
+                "Pistas que orientan sin revelar de antemano la respuesta final prohibida |"
+            )
+        if baseline.student_diagnosis_rate is not None:
+            lines.append(
+                f"| **Diagnóstico de Errores del Estudiante** | "
+                f"`{baseline.student_diagnosis_rate:.2%}` | "
+                "Detección del paso incorrecto en resoluciones enviadas por el estudiante |"
+            )
+        if baseline.strict_abstention_accuracy is not None:
+            lines.append(
+                f"| **Abstención en Modo Estricto** | "
+                f"`{baseline.strict_abstention_accuracy:.2%}` | "
+                "Abstención fiel cuando faltan premisas en la base de conocimiento |"
+            )
+        lines.append("")
 
     if test_summary is not None:
         lines.extend(

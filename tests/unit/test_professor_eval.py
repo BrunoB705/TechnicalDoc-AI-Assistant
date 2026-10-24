@@ -128,3 +128,83 @@ def test_reproduce_ieee754_diagnosis_step_back_retrieval():
     )
     assert len(hits_sb) == 1
     assert hits_sb[0][1] == 0.94
+
+
+def test_evaluate_dataset_computes_pedagogical_metrics_with_llm():
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    from app.evaluation.metrics import EvalCase
+    from app.evaluation.runner import evaluate_dataset
+
+    vs = MagicMock(spec=Chroma)
+    vs._collection.count.return_value = 1
+    doc = Document(
+        page_content="IEEE 754: 1 bit signo, 8 exponente con sesgo 127 y 23 mantisa.",
+        metadata={"chunk_id": "c1", "source": "norma.md", "knowledge_base_id": "arquitectura"},
+    )
+    vs.similarity_search_with_relevance_scores.return_value = [(doc, 0.95)]
+
+    cases = [
+        EvalCase(
+            id="p_solve",
+            knowledge_base_id="arquitectura",
+            category="solve",
+            should_abstain=False,
+            question="Calculame 137 en simple",
+            expected_source="norma.md",
+            expected_answer="S=0 E=10000110 M=0001001",
+            pedagogical_mode="solve",
+            expected_calculation={"sign": "0", "exponent": "10000110"},
+        ),
+        EvalCase(
+            id="p_hint",
+            knowledge_base_id="arquitectura",
+            category="hint",
+            should_abstain=False,
+            question="Dame una pista para 137",
+            expected_source="norma.md",
+            expected_answer="Pensá en potencias de dos",
+            pedagogical_mode="hint",
+            forbidden_in_hints=["10000110", "0x43090000"],
+        ),
+        EvalCase(
+            id="p_check",
+            knowledge_base_id="arquitectura",
+            category="check",
+            should_abstain=False,
+            question="¿Está bien si puse E=7?",
+            expected_source="norma.md",
+            expected_answer="sesgo, bias",
+            pedagogical_mode="check",
+            student_attempt="E=7",
+        ),
+        EvalCase(
+            id="p_strict",
+            knowledge_base_id="arquitectura",
+            category="missing_premise",
+            should_abstain=True,
+            question="Calculame en formato de 16 bits",
+            strict_mode=True,
+        ),
+    ]
+
+    llm = FakeListChatModel(
+        responses=[
+            "Paso a paso [1]: S=0, E=10000110, M=0001001.",
+            "Pista guiada [1]: Descomponé 137 en potencias de dos (128 + 8 + 1).",
+            "Diagnóstico [1]: Cometiste un error con el sesgo del exponente.",
+            "NO_EVIDENCE",
+        ]
+    )
+
+    settings = Settings(min_relevance=0.80, top_k=3)
+    summary, outcomes = evaluate_dataset(cases, vs, settings, llm=llm)
+
+    assert summary.numerical_correctness_rate == 1.0
+    assert summary.hint_progression_rate == 1.0
+    assert summary.student_diagnosis_rate == 1.0
+    assert summary.strict_abstention_accuracy == 1.0
+    assert outcomes[0].numerical_correct is True
+    assert outcomes[1].hint_valid is True
+    assert outcomes[2].diagnosis_correct is True
+    assert outcomes[3].abstained is True

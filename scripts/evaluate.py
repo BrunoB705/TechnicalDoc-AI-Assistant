@@ -75,7 +75,18 @@ def main() -> None:
         action="store_true",
         help="Ejecuta también el LLM para medir exactitud de respuesta y validez de citas [n]",
     )
+    parser.add_argument(
+        "--eval-professor",
+        action="store_true",
+        help="Ejecuta la evaluación sobre el dataset pedagógico del Modo Profesor",
+    )
     args = parser.parse_args()
+
+    if args.eval_professor:
+        if args.dataset == Path("eval/dataset.jsonl"):
+            args.dataset = Path("eval/professor_dataset.jsonl")
+        if args.test_dataset == Path("eval/test_dataset.jsonl"):
+            args.test_dataset = Path("eval/test_professor_dataset.jsonl")
 
     settings = get_settings()
     embeddings = get_embeddings(settings, lazy=False)
@@ -162,9 +173,14 @@ def main() -> None:
     }
 
     args.reports_dir.mkdir(parents=True, exist_ok=True)
-    json_path = args.reports_dir / "latest.json"
-    cal_md_path = args.reports_dir / "calibration_report.md"
-    latest_md_path = args.reports_dir / "latest_report.md"
+    if args.eval_professor:
+        json_path = args.reports_dir / "professor_report.json"
+        cal_md_path = args.reports_dir / "professor_report.md"
+        latest_md_path = args.reports_dir / "professor_report.md"
+    else:
+        json_path = args.reports_dir / "latest.json"
+        cal_md_path = args.reports_dir / "calibration_report.md"
+        latest_md_path = args.reports_dir / "latest_report.md"
 
     payload = serialize_report(
         summary,
@@ -195,6 +211,12 @@ def main() -> None:
         f"Isolation={summary.isolation_rate:.2%} | "
         f"Score={summary.composite_score:.4f}"
     )
+    if summary.numerical_correctness_rate is not None:
+        print(
+            f"Pedagogical: NumericalAcc={summary.numerical_correctness_rate:.2%} | "
+            f"HintProgression={summary.hint_progression_rate or 0:.2%} | "
+            f"Diagnosis={summary.student_diagnosis_rate or 0:.2%}"
+        )
     if test_summary is not None:
         print(
             f"[Held-Out Test Set: {test_summary.total_cases} casos] "

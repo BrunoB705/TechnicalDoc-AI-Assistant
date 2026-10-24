@@ -140,10 +140,12 @@ docker run --rm -p 8000:8000 -v "${PWD}/data:/app/data" -e READ_ONLY_MODE=true -
 Ejemplo de `POST /query`:
 ```json
 {
-  "question": "¿Cuántos niveles de memoria caché implementan los procesadores modernos?",
+  "question": "Calculame el número 137 en punto flotante simple según la norma",
   "knowledge_base_id": "arquitectura",
   "conversation_id": "conv_abc123",
-  "top_k": 4
+  "top_k": 4,
+  "pedagogical_mode": "solve",
+  "strict_mode": false
 }
 ```
 
@@ -152,9 +154,36 @@ Ejemplo de `POST /query`:
 
 ---
 
+## 🎓 Experiencia Pedagógica del Modo Profesor
+
+El sistema incorpora un **Profesor de IA** orientado a materias técnicas y de ingeniería. A diferencia de un bot de búsqueda literal que se abstiene ante números o casos no vistos, el profesor utiliza los documentos de la base de conocimiento como **material de estudio fundamental** para deducir desarrollos, plantear pistas progresivas y diagnosticar errores.
+
+### 1. Modos Pedagógicos
+- **`✨ Auto` (`auto`):** Infiere el objetivo pedagógico del usuario a partir de la intención de la consulta.
+- **`📖 Explicar` (`explain`):** Fundamentación conceptual, diseño y fórmulas teóricas de la cátedra.
+- **`🧮 Resolver` (`solve`):** Resolución guiada paso a paso aplicando rigurosamente las reglas y convenciones de la base.
+- **`💡 Pistas` (`hint`):** *Scaffolding* cognitivo. Plantea preguntas socráticas y el próximo paso a seguir sin spoilear ni entregar la respuesta final.
+- **`✏️ Corregir` (`check`):** Diagnóstico de errores. Analiza la propuesta enviada por el estudiante e identifica con precisión el paso conceptualmente erróneo.
+
+### 2. Doble Atribución y Transparencia
+- **Citas a la base (`[n]`):** Todas las reglas, fórmulas y definiciones tomadas de los apuntes se citan formalmente con chips interactivos.
+- **Conocimiento General (`[Conocimiento General]`):** Cuando se resuelven ejercicios abiertos, cualquier convención universalmente estándar no explícita en el apunte se etiqueta con total transparencia.
+
+### 3. Modo Estricto (`strict_mode`)
+Diseñado para materias donde solo son válidas las convenciones de la cátedra:
+- **Activado (`strict_mode: true`):** El asistente se restringe al 100% a la información de la Knowledge Base activa. Si el problema requiere una premisa ausente en los documentos (p. ej., formato de 16 bits sin definir o modo de redondeo omitido), el profesor se abstiene de forma determinista con el motivo `missing_premise_strict` y solicita al estudiante definir la convención requerida.
+
+### 4. Herramientas de Verificación Simbólica (Toolsets Desacoplados)
+Para garantizar cálculos matemáticos y conversiones exactas sin alucinaciones de tokens:
+- **`ToolRegistry` Modular:** Arquitectura desacoplada y domain-agnostic.
+- **`SafeCalculatorTool`:** Calculadora aritmética segura basada en parsing de AST de Python (sin uso de `eval`/`exec`).
+- **Toolset de Arquitectura de Computadoras:** Conversor de bases (2, 8, 10, 16), representaciones enteras con signo (Signo y Magnitud, Complemento a 1, Complemento a 2, Exceso, banderas ALU $Z, N, C, V$) y codificación IEEE 754 (Media, Simple y Doble precisión con desglose de bits de signo, exponente sesgado y mantisa normalizada).
+
+---
+
 ## 🧪 Pruebas Automatizadas y Calidad de Código
 
-La suite cuenta con **99 pruebas unitarias e integradas** que verifican configuración, reutilización de embeddings, ingesta transaccional, aislamiento entre Knowledge Bases, paridad `/query` vs `/query/stream`, evaluación cuantitativa (dev + test set independiente), reproducibilidad, protecciones (`READ_ONLY_MODE` y rate limiting) y persistencia/reformulación conversacional sin requerir conexión a internet ni LLMs externos:
+La suite cuenta con **131 pruebas unitarias e integradas** que verifican configuración, reutilización de embeddings, ingesta transaccional, aislamiento entre Knowledge Bases, paridad `/query` vs `/query/stream`, evaluación cuantitativa (dev + test set independiente), herramientas del profesor, prompts pedagógicos, protecciones (`READ_ONLY_MODE` y rate limiting) y persistencia conversacional sin requerir conexión a internet ni LLMs externos:
 
 ```powershell
 # Ejecutar toda la suite de tests
@@ -179,6 +208,7 @@ uv run ruff check .
 - [x] **Fase 8**: Reproducibilidad, CI/CD y contenerización (Docker, GitHub Actions, corpus demo).
 - [x] **Fase 9**: Hardening para demo pública (`READ_ONLY_MODE`, rate limiting, `/health/live`, `/health/ready` y documentación).
 - [x] **Fase 10**: Memoria conversacional y persistencia multi-turn (historial en SQLite, endpoints CRUD de conversaciones, condensación de preguntas de seguimiento y aislamiento KB en chat).
+- [x] **Fase 11**: Modo Profesor y Experiencia Pedagógica (modos `auto`, `explain`, `solve`, `hint`, `check`, herramientas seguras de cálculo y arquitectura, modo estricto de premisas, doble atribución `[KB]` / `[Conocimiento General]` y benchmark cuantitativo pedagógico).
 
 ---
 
@@ -187,6 +217,7 @@ uv run ruff check .
 El repositorio incluye un framework reproducible de evaluación ([`scripts/evaluate.py`](scripts/evaluate.py) y [`app/evaluation/`](app/evaluation/)) sobre el corpus multi-KB (`eval/corpus/`: bases `arquitectura`, `backend` y `operaciones`), separando dos conjuntos disjuntos:
 1. **Conjunto de Desarrollo / Calibración (`eval/dataset.jsonl`, 45 casos):** 30 consultas positivas con evidencia, 8 negativas fuera de dominio y 7 consultas cruzadas entre bases (*cross-KB*).
 2. **Conjunto de Prueba Independiente / Held-Out (`eval/test_dataset.jsonl`, 15 casos):** 10 consultas positivas, 3 negativas y 2 *cross-KB* no utilizadas para seleccionar hiperparámetros.
+3. **Benchmark del Modo Profesor (`eval/professor_dataset.jsonl` [30 casos] y `eval/test_professor_dataset.jsonl` [12 casos]):** Casos específicos de resolución analítica, scaffolding de pistas, diagnóstico de errores de estudiantes y abstención en modo estricto.
 
 ### Resultados de Recuperación y Aislamiento (`intfloat/multilingual-e5-small`)
 
@@ -200,10 +231,21 @@ El repositorio incluye un framework reproducible de evaluación ([`scripts/evalu
 | **Aislamiento entre KBs** | **100.00%** (45/45) | **100.00%** (15/15) | Cero fugas de fragmentos (`0` chunks contaminados) entre bases de conocimiento distintas. |
 | **Latencia de Recuperación** | **26.73 ms** (p95: **36.70 ms**) | **25.40 ms** | Búsqueda vectorial local + filtrado obligatorio por `knowledge_base_id` en ChromaDB. |
 
-Para reproducir la evaluación (genera `eval/reports/calibration_report.md`, `eval/reports/latest_report.md` y `eval/reports/latest.json`):
+### Resultados del Benchmark Pedagógico (Modo Profesor)
+| Métrica | Dataset de Desarrollo (`30` casos) | Held-Out Test Set (`12` casos) |
+|---|---|---|
+| **Recall@k Conceptual (Step-Back)** | **100.00%** | **100.00%** |
+| **MRR** | **1.0000** | **1.0000** |
+| **Aislamiento entre KBs** | **100.00%** | **100.00%** |
+| **Puntaje de Recuperación** | **0.7000** | **0.7000** |
+
+Para reproducir las evaluaciones:
 ```powershell
-# Evaluación determinista de recuperación y aislamiento (Dev + Held-Out Test Set)
+# Evaluación estándar de recuperación y aislamiento (Dev + Held-Out Test Set)
 uv run python scripts/evaluate.py
+
+# Benchmark específico del Modo Profesor (genera eval/reports/professor_report.md)
+uv run python scripts/evaluate.py --eval-professor
 
 # Barrido completo de calibración (chunk_size x top_k x min_relevance)
 uv run python scripts/evaluate.py --calibrate

@@ -122,6 +122,9 @@ class CaseOutcome:
     citations_valid: bool | None = None
     abstention_reason: str | None = None
     abstention_message: str | None = None
+    numerical_correct: bool | None = None
+    hint_valid: bool | None = None
+    diagnosis_correct: bool | None = None
 
 
 @dataclass
@@ -144,6 +147,10 @@ class EvalSummary:
     answer_correctness: float | None = None
     citation_validity_rate: float | None = None
     end_to_end_score: float | None = None
+    numerical_correctness_rate: float | None = None
+    hint_progression_rate: float | None = None
+    student_diagnosis_rate: float | None = None
+    strict_abstention_accuracy: float | None = None
 
 
 def compute_rank(retrieved_sources: list[str], expected_source: str | None) -> int | None:
@@ -322,6 +329,34 @@ def aggregate_outcomes(outcomes: list[CaseOutcome]) -> EvalSummary:
     # 45% Recall@k + 25% MRR + 30% Refusal Accuracy, penalizado si falla el aislamiento
     composite = (0.45 * recall_val + 0.25 * mrr_val + 0.30 * refusal_acc) * isolation
 
+    num_outcomes = [o for o in outcomes if o.numerical_correct is not None]
+    num_rate = (
+        round(sum(1.0 for o in num_outcomes if o.numerical_correct) / len(num_outcomes), 4)
+        if num_outcomes
+        else None
+    )
+
+    hint_outcomes = [o for o in outcomes if o.hint_valid is not None]
+    hint_rate = (
+        round(sum(1.0 for o in hint_outcomes if o.hint_valid) / len(hint_outcomes), 4)
+        if hint_outcomes
+        else None
+    )
+
+    diag_outcomes = [o for o in outcomes if o.diagnosis_correct is not None]
+    diag_rate = (
+        round(sum(1.0 for o in diag_outcomes if o.diagnosis_correct) / len(diag_outcomes), 4)
+        if diag_outcomes
+        else None
+    )
+
+    strict_cases = [o for o in outcomes if o.case.strict_mode and o.case.should_abstain]
+    strict_acc = (
+        round(sum(1.0 for o in strict_cases if o.abstained) / len(strict_cases), 4)
+        if strict_cases
+        else None
+    )
+
     return EvalSummary(
         total_cases=len(outcomes),
         positive_cases=len(positives),
@@ -341,4 +376,8 @@ def aggregate_outcomes(outcomes: list[CaseOutcome]) -> EvalSummary:
         answer_correctness=ans_corr,
         citation_validity_rate=cit_val,
         end_to_end_score=end_to_end,
+        numerical_correctness_rate=num_rate,
+        hint_progression_rate=hint_rate,
+        student_diagnosis_rate=diag_rate,
+        strict_abstention_accuracy=strict_acc,
     )
