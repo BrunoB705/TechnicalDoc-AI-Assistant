@@ -4,6 +4,7 @@ from langchain_chroma import Chroma
 from langchain_core.embeddings import Embeddings
 
 from app.config import get_settings
+from app.conversations.service import ConversationService
 from app.documents.service import DocumentService
 from app.knowledge_bases.service import KnowledgeBaseService
 from app.rag.embeddings import get_embeddings
@@ -34,8 +35,13 @@ def get_knowledge_base_service() -> KnowledgeBaseService:
 def get_rag_service() -> RAGService:
     settings = get_settings()
     kb_svc = get_knowledge_base_service()
+    conv_svc = get_conversation_service()
     return RAGService(
-        get_shared_vectorstore(), get_llm(settings), settings, kb_service=kb_svc
+        get_shared_vectorstore(),
+        get_llm(settings),
+        settings,
+        kb_service=kb_svc,
+        conversation_service=conv_svc,
     )
 
 
@@ -44,3 +50,9 @@ def get_document_service() -> DocumentService:
     settings = get_settings()
     kb_svc = get_knowledge_base_service()
     return DocumentService(get_shared_vectorstore(), settings, kb_service=kb_svc)
+
+
+@lru_cache
+def get_conversation_service() -> ConversationService:
+    settings = get_settings()
+    return ConversationService(settings)

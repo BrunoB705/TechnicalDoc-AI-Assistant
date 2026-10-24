@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     max_upload_mb: int = 20
     read_only_mode: bool = False
     rate_limit_per_minute: int = 60
+    conversation_window_exchanges: int = 6
 
     chunk_size: int = 650
     chunk_overlap: int = 100

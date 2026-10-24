@@ -10,6 +10,8 @@ const kbSelect = $("kb-select");
 
 let activeKbId = "general";
 let kbCatalog = [];
+let activeConversationId = null;
+let conversationsCatalog = [];
 let readOnlyMode = false;
 let latestAnswer = "";
 let latestQuestion = "";
@@ -190,6 +192,11 @@ async function checkHealth() {
     $("new-kb-btn").disabled = readOnlyMode;
     $("upload-btn").disabled = readOnlyMode;
     $("file").disabled = readOnlyMode;
+    const newChatBtn = $("new-chat-btn");
+    if (newChatBtn) newChatBtn.disabled = readOnlyMode;
+    document.querySelectorAll(".conv-del-btn").forEach((btn) => {
+      btn.disabled = readOnlyMode;
+    });
     updateKbBanner();
   } catch {
     badge.className = "badge badge-down";
@@ -242,6 +249,16 @@ kbSelect?.addEventListener("change", () => {
   loadDocs();
 });
 
+$("open-docs-modal-btn")?.addEventListener("click", () => {
+  setStatus("");
+  $("docs-modal")?.showModal();
+  loadDocs();
+});
+
+$("close-docs-modal-btn")?.addEventListener("click", () => {
+  $("docs-modal")?.close();
+});
+
 $("new-kb-btn")?.addEventListener("click", () => {
   $("kb-name").value = "";
   $("kb-desc").value = "";
@@ -289,6 +306,160 @@ $("del-kb-btn")?.addEventListener("click", async () => {
     setStatus(await errorText(r), "err");
   }
 });
+
+// ---------- conversaciones (sidebar) ----------
+function renderConversationsList() {
+  const list = $("conversations-list");
+  if (!list) return;
+  list.replaceChildren();
+  if (!conversationsCatalog.length) {
+    list.appendChild(el("li", "muted", "Sin conversaciones previas."));
+    return;
+  }
+  for (const c of conversationsCatalog) {
+    const li = el("li", `conv-item${c.id === activeConversationId ? " active" : ""}`);
+    li.dataset.convId = c.id;
+    const info = el("div", "conv-info");
+    info.appendChild(el("div", "conv-title", c.title));
+    info.appendChild(el("div", "conv-meta", `KB: ${c.last_kb_id || "general"} · ${c.message_count ?? 0} msj`));
+    const delBtn = el("button", "conv-del-btn", "×");
+    delBtn.type = "button";
+    delBtn.title = "Eliminar conversación";
+    delBtn.setAttribute("aria-label", `Eliminar conversación ${c.title}`);
+    delBtn.disabled = readOnlyMode;
+    delBtn.addEventListener("click", (ev) => deleteConversation(c, ev));
+    li.append(info, delBtn);
+    li.addEventListener("click", () => selectConversation(c.id));
+    list.appendChild(li);
+  }
+}
+
+async function loadConversations() {
+  try {
+    const r = await fetch("/conversations");
+    if (!r.ok) return;
+    const { conversations } = await r.json();
+    conversationsCatalog = conversations || [];
+    renderConversationsList();
+  } catch {
+    /* silencioso en arranque si offline */
+  }
+}
+
+function startNewChat() {
+  activeConversationId = null;
+  renderConversationsList();
+  messagesEl.replaceChildren(
+    el("div", "empty", "Hacé una pregunta sobre los documentos de la base seleccionada.")
+  );
+  messagesEl.firstElementChild.id = "empty-hint";
+  latestAnswer = "";
+  latestQuestion = "";
+  if (downloadBtn) downloadBtn.disabled = true;
+  questionEl.focus();
+}
+
+function renderHistoricalBotMessage(m) {
+  $("empty-hint")?.remove();
+  const msgId = `m${++counter}`;
+  const bubble = el("div", "msg bot");
+  const textEl = el("div", "msg-text");
+  const extra = el("div");
+  bubble.append(textEl, extra);
+
+  const text = (m.content || "").trim();
+  if (!m.grounded) {
+    bubble.classList.add("warn");
+    textEl.textContent = text || m.message || "No se pudo verificar la respuesta con los documentos.";
+  } else {
+    renderWithCitations(textEl, text, msgId);
+  }
+
+  const cited = m.sources || [];
+  if (cited.length) {
+    const box = el("div", "sources");
+    cited.forEach((s) => box.appendChild(sourceNode(s, msgId)));
+    extra.appendChild(box);
+  }
+  const retrieved = m.retrieved || [];
+  const others = retrieved.filter((r) => !cited.some((c) => c.id === r.id));
+  if (others.length) {
+    const det = el("details", "retrieved");
+    det.appendChild(el("summary", null, `Otros fragmentos recuperados (${others.length})`));
+    const box = el("div", "sources");
+    others.forEach((s) => box.appendChild(sourceNode(s, msgId)));
+    det.appendChild(box);
+    extra.appendChild(det);
+  }
+  const kbId = m.knowledge_base_id || "general";
+  extra.appendChild(el("div", "meta", `KB: ${kbId}`));
+  messagesEl.appendChild(bubble);
+}
+
+async function selectConversation(convId) {
+  try {
+    const r = await fetch(`/conversations/${encodeURIComponent(convId)}`);
+    if (!r.ok) return;
+    const detail = await r.json();
+    activeConversationId = detail.id;
+    renderConversationsList();
+
+    if (detail.last_kb_id && kbCatalog.some((k) => k.id === detail.last_kb_id)) {
+      activeKbId = detail.last_kb_id;
+      kbSelect.value = activeKbId;
+      updateKbBanner();
+      loadDocs();
+    }
+
+    messagesEl.replaceChildren();
+    latestAnswer = "";
+    latestQuestion = "";
+    let lastUserQuestion = "";
+    const msgs = detail.messages || [];
+    if (!msgs.length) {
+      const empty = el("div", "empty", "Hacé una pregunta sobre los documentos de la base seleccionada.");
+      empty.id = "empty-hint";
+      messagesEl.appendChild(empty);
+    } else {
+      for (const m of msgs) {
+        if (m.role === "user") {
+          lastUserQuestion = m.content || "";
+          addUserMessage(lastUserQuestion);
+        } else if (m.role === "assistant") {
+          renderHistoricalBotMessage(m);
+          if (m.grounded && m.content) {
+            latestAnswer = m.content.trim();
+            latestQuestion = lastUserQuestion;
+          }
+        }
+      }
+    }
+    if (downloadBtn) downloadBtn.disabled = !latestAnswer;
+    scrollDown();
+  } catch (e) {
+    console.error("No se pudo cargar la conversación:", e);
+  }
+}
+
+async function deleteConversation(conv, ev) {
+  ev.stopPropagation();
+  if (!confirm(`¿Eliminar la conversación "${conv.title}"?`)) return;
+  try {
+    const r = await fetch(`/conversations/${encodeURIComponent(conv.id)}`, {
+      method: "DELETE",
+    });
+    if (r.ok) {
+      if (activeConversationId === conv.id) {
+        startNewChat();
+      }
+      await loadConversations();
+    }
+  } catch (e) {
+    console.error("Error al eliminar conversación:", e);
+  }
+}
+
+$("new-chat-btn")?.addEventListener("click", () => startNewChat());
 
 // ---------- chat (SSE por fetch) ----------
 let counter = 0;
@@ -361,8 +532,24 @@ async function ask(question, topK) {
   };
 
   try {
+    if (!activeConversationId && !readOnlyMode) {
+      const convResp = await fetch("/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: question.slice(0, 60),
+          knowledge_base_id: kbSnapshot,
+        }),
+      });
+      if (convResp.ok) {
+        const createdConv = await convResp.json();
+        activeConversationId = createdConv.id;
+      }
+    }
+
     const body = { question, knowledge_base_id: kbSnapshot };
     if (topK) body.top_k = topK;
+    if (activeConversationId) body.conversation_id = activeConversationId;
     const resp = await fetch("/query/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -391,6 +578,9 @@ async function ask(question, topK) {
         if (renderRafId !== null) {
           cancelAnimationFrame(renderRafId);
           renderRafId = null;
+        }
+        if (data.conversation_id && !activeConversationId) {
+          activeConversationId = data.conversation_id;
         }
         const finalText = typeof data.answer === "string" && data.answer ? data.answer : answer;
         if (!data.grounded) {
@@ -424,6 +614,7 @@ async function ask(question, topK) {
       }
     });
     if (!textEl.textContent) textEl.textContent = "La respuesta llegó vacía.";
+    await loadConversations();
   } catch (e) {
     fail(`No se pudo conectar con el servidor: ${e.message}`);
   }
@@ -668,4 +859,5 @@ $("upload-form").addEventListener("submit", async (ev) => {
 checkHealth();
 setInterval(checkHealth, 15000);
 loadKbs("general").then(() => loadDocs());
+loadConversations();
 questionEl.focus();

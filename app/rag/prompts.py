@@ -16,3 +16,35 @@ PROMPT = ChatPromptTemplate.from_messages(
         ("human", "CONTEXTO:\n{context}\n\nPREGUNTA: {question}"),
     ]
 )
+
+CONDENSE_SYSTEM_PROMPT = """Sos un asistente que reformula preguntas de seguimiento en preguntas \
+autónomas para un buscador de documentación técnica.
+Dado el HISTORIAL de conversación y la PREGUNTA ACTUAL del usuario:
+- Si la pregunta actual depende del historial (usa pronombres, omite el sujeto o dice cosas como \
+"¿Y en hexadecimal?", "¿Cómo se configura?"), reescribila en una sola oración clara y autónoma \
+que incorpore el tema del historial.
+- Si la pregunta actual ya es autónoma o cambia completamente de tema, devolvela exactamente igual.
+- NO respondas la pregunta, SOLO devolvé la pregunta reformulada en el mismo idioma."""
+
+CONDENSE_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", CONDENSE_SYSTEM_PROMPT),
+        ("human", "HISTORIAL:\n{history}\n\nPREGUNTA ACTUAL: {question}\n\nPREGUNTA AUTÓNOMA:"),
+    ]
+)
+
+CONVERSATIONAL_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", SYSTEM_PROMPT),
+        (
+            "human",
+            "HISTORIAL DE CONVERSACIÓN:\n{history}\n\nCONTEXTO:\n{context}\n\nPREGUNTA: {question}",
+        ),
+    ]
+)
+
+
+def format_history(history: list[tuple[str, str]]) -> str:
+    return "\n".join(
+        f"{'Usuario' if role == 'user' else 'Asistente'}: {content}" for role, content in history
+    )

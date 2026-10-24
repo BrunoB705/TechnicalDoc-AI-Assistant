@@ -51,13 +51,12 @@ def check_rate_limit(request: Request, service: RAGService = Depends(get_rag_ser
 def query(req: QueryRequest, service: RAGService = Depends(get_rag_service)) -> QueryResponse:
     start = time.perf_counter()
     result = service.answer(
-        req.question, req.top_k, knowledge_base_id=req.knowledge_base_id
+        req.question,
+        req.top_k,
+        knowledge_base_id=req.knowledge_base_id,
+        conversation_id=req.conversation_id,
     )
-    msg = (
-        None
-        if result.grounded
-        else (result.message or MESSAGES.get(result.reason or ""))
-    )
+    msg = None if result.grounded else (result.message or MESSAGES.get(result.reason or ""))
     return QueryResponse(
         answer=result.answer,
         grounded=result.grounded,
@@ -67,6 +66,7 @@ def query(req: QueryRequest, service: RAGService = Depends(get_rag_service)) -> 
         message=msg,
         reason=result.reason,
         knowledge_base_id=result.knowledge_base_id,
+        conversation_id=result.conversation_id,
     )
 
 
@@ -85,12 +85,17 @@ async def query_stream(
     service: RAGService = Depends(get_rag_service),
 ) -> StreamingResponse:
     """Endpoint de streaming por Server-Sent Events (SSE). Emite tokens a medida que se generan."""
-    # Validamos que la KB exista (404) o que el índice esté disponible (409) antes de abrir SSE
+    # Validamos que la KB exista (404), la conversación exista (404) o que el índice esté
+    # disponible (409) antes de abrir SSE
     service._resolve_kb(req.knowledge_base_id)
+    service._resolve_history(req.conversation_id)
 
     async def event_generator():
         async for item in service.stream_answer(
-            req.question, req.top_k, knowledge_base_id=req.knowledge_base_id
+            req.question,
+            req.top_k,
+            knowledge_base_id=req.knowledge_base_id,
+            conversation_id=req.conversation_id,
         ):
             if await request.is_disconnected():
                 break

@@ -4,13 +4,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import documents, health, knowledge_bases, query, ui
+from app.api.routes import conversations, documents, health, knowledge_bases, query, ui
 from app.exceptions import (
+    ConversationNotFoundError,
     DocumentNotFoundError,
     DocumentTooLargeError,
     DuplicateDocumentError,
     DuplicateKnowledgeBaseError,
     EmptyIndexError,
+    InvalidConversationError,
     InvalidDocumentError,
     InvalidKnowledgeBaseError,
     KnowledgeBaseNotFoundError,
@@ -27,6 +29,7 @@ def create_app() -> FastAPI:
     app.include_router(query.router)
     app.include_router(knowledge_bases.router)
     app.include_router(documents.router)
+    app.include_router(conversations.router)
     app.include_router(ui.router)
     app.mount("/static", StaticFiles(directory=ui.STATIC_DIR), name="static")
 
@@ -52,6 +55,8 @@ def create_app() -> FastAPI:
     _register(KnowledgeBaseNotFoundError, 404, "knowledge_base_not_found")
     _register(DuplicateKnowledgeBaseError, 409, "duplicate_knowledge_base")
     _register(InvalidKnowledgeBaseError, 422, "invalid_knowledge_base")
+    _register(ConversationNotFoundError, 404, "conversation_not_found")
+    _register(InvalidConversationError, 422, "invalid_conversation")
     _register(ReadOnlyModeError, 403, "read_only_mode")
     _register(RateLimitExceededError, 429, "rate_limit_exceeded")
 

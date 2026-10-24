@@ -19,10 +19,29 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 .badge-down { background: #3d1f1a; color: var(--err); }
 .badge-unknown { background: var(--border); color: var(--muted); }
 
-.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 340px; gap: 16px; padding: 16px; }
+.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr; gap: 16px; padding: 16px; }
 @media (max-width: 800px) { .layout { grid-template-columns: 1fr; overflow-y: auto; } }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   display: flex; flex-direction: column; min-height: 0; }
+
+.conversations-sidebar { padding: 12px; overflow: hidden; }
+.sidebar-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+.sidebar-header h2 { font-size: 15px; margin: 0; }
+.sidebar-header button { padding: 6px 10px; font-size: 12px; }
+.conversations-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1;
+  display: flex; flex-direction: column; gap: 6px; }
+.conv-item { background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+.conv-item:hover { border-color: #3f4f63; }
+.conv-item.active { border-color: var(--accent); background: #162231; }
+.conv-info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.conv-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv-meta { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv-del-btn { background: transparent; color: var(--muted); border: 1px solid transparent;
+  padding: 2px 6px; font-size: 14px; line-height: 1; border-radius: 4px; flex-shrink: 0; }
+.conv-del-btn:hover:not(:disabled) { color: var(--err); border-color: var(--err); }
+
 .chat { overflow: hidden; }
 .kb-banner { padding: 8px 16px; background: #141b23; border-bottom: 1px solid var(--border);
   font-size: 13px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
@@ -181,3 +200,10 @@ button.danger { background: transparent; color: var(--err); border: 1px solid va
 .modal h3 { margin: 0 0 12px; font-size: 16px; }
 .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; margin-bottom: 10px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+
+.docs-modal { width: min(560px, 94vw); max-height: 82vh; overflow-y: auto; }
+.docs-modal-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+.docs-modal-header h3 { margin: 0; }
+.docs-kb-actions { display: flex; gap: 8px; flex-wrap: wrap; padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+.docs-section h4 { font-size: 14px; margin: 0 0 10px; }
+.docs-section .docs-list { max-height: 40vh; }
