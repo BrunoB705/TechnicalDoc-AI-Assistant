@@ -93,11 +93,16 @@ def _stem_word(word: str) -> str:
 class EvalCase:
     id: str
     knowledge_base_id: str
-    category: Category
+    category: str
     should_abstain: bool
     question: str
     expected_source: str | None = None
     expected_answer: str | None = None
+    pedagogical_mode: str | None = None
+    student_attempt: str | None = None
+    expected_calculation: dict[str, object] | None = None
+    forbidden_in_hints: list[str] | None = None
+    strict_mode: bool = False
 
 
 @dataclass
@@ -198,6 +203,54 @@ def check_citation_validity(
     if not expected_source:
         return True
     return compute_rank(cited_sources, expected_source) is not None
+
+
+def check_numerical_correctness(
+    generated: str | None,
+    expected_calculation: dict[str, object] | None,
+) -> bool:
+    """Verifica que los campos numéricos y de bits calculados aparezcan en el texto generado."""
+    if not expected_calculation:
+        return True
+    if not generated:
+        return False
+    gen_norm = re.sub(r"\s+", "", generated.lower())
+    for val in expected_calculation.values():
+        val_str = str(val).lower()
+        val_clean = re.sub(r"\s+", "", val_str)
+        if val_clean not in gen_norm and val_str not in generated.lower():
+            return False
+    return True
+
+
+def check_hint_progression(
+    generated: str | None,
+    forbidden_in_hints: list[str] | None,
+) -> bool:
+    """Comprueba que una respuesta en modo pistas no revele la solución final prohibida."""
+    if not forbidden_in_hints:
+        return True
+    if not generated:
+        return True
+    gen_norm = re.sub(r"\s+", "", generated.lower())
+    for forbidden in forbidden_in_hints:
+        clean = re.sub(r"\s+", "", str(forbidden).lower())
+        if clean and (clean in gen_norm or str(forbidden).lower() in generated.lower()):
+            return False
+    return True
+
+
+def check_student_error_diagnosis(
+    generated: str | None,
+    expected_diagnosis_terms: list[str] | None,
+) -> bool:
+    """Comprueba que la corrección identifique los términos clave del error del alumno."""
+    if not expected_diagnosis_terms:
+        return True
+    if not generated:
+        return False
+    gen_low = generated.lower()
+    return any(term.lower() in gen_low for term in expected_diagnosis_terms)
 
 
 def _percentile(values: list[float], pct: float) -> float:
