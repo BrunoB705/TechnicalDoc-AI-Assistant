@@ -33,7 +33,10 @@ class Settings(BaseSettings):
     chunk_overlap: int = 100
     top_k: int = 4
     min_relevance: float = 0.80  # calibrado empíricamente para intfloat/multilingual-e5-small
-    enable_step_back: bool = False
+    enable_step_back: bool = True
+    enable_professor: bool = True
+    default_pedagogical_mode: Literal["auto", "explain", "solve", "hint", "check"] = "auto"
+    default_strict_mode: bool = False
 
 
 @lru_cache

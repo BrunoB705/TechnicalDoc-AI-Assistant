@@ -1,8 +1,10 @@
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 import openai
@@ -22,8 +24,10 @@ from app.rag.prompts import (
     NO_EVIDENCE,
     PROMPT,
     STEP_BACK_PROMPT,
+    build_professor_prompt,
     format_history,
 )
+from app.rag.tools.registry import ToolRegistry, get_default_registry
 
 logger = logging.getLogger("rag")
 
@@ -43,6 +47,10 @@ MESSAGES = {
     "model_refused": "La documentación disponible no contiene información para responder esto.",
     "no_citations": (
         "No se pudo verificar la respuesta contra las fuentes recuperadas (faltan citas)."
+    ),
+    "missing_premise_strict": (
+        "La base de conocimiento no contiene la convención o regla necesaria para resolver "
+        "este problema y el Modo Estricto está activo."
     ),
 }
 
@@ -68,6 +76,9 @@ class QueryResult:
     message: str | None = None
     knowledge_base_id: str = "general"
     conversation_id: str | None = None
+    pedagogical_mode: str = "auto"
+    strict_mode: bool = False
+    verification_data: dict[str, Any] | None = None
 
 
 def _to_hit(idx: int, doc: Document, score: float) -> SourceHit:
@@ -100,12 +111,14 @@ class RAGService:
         settings: Settings,
         kb_service: KnowledgeBaseService | None = None,
         conversation_service: ConversationService | None = None,
+        tool_registry: ToolRegistry | None = None,
     ):
         self.vs = vectorstore
         self.llm = llm
         self.settings = settings
         self.kb_service = kb_service
         self.conversation_service = conversation_service or ConversationService(settings)
+        self.tool_registry = tool_registry or get_default_registry()
 
     def _condense_question(self, history: list[tuple[str, str]], question: str) -> str:
         if not history:
@@ -149,23 +162,81 @@ class RAGService:
             logger.warning(json.dumps({"event": "step_back_error", "error": type(exc).__name__}))
             return question
 
+    def _detect_and_run_tools(self, question: str) -> tuple[str | None, dict[str, Any]]:
+        """Detecta patrones computables comunes (IEEE 754, Ca2, bases, calculadora)
+        y ejecuta herramientas deterministas de apoyo.
+        """
+        low = question.lower()
+        tool_data: dict[str, Any] = {}
+        hints: list[str] = []
+
+        # 1. Detección de IEEE 754
+        if any(w in low for w in ("ieee", "flotante", "precisión", "precision")):
+            m_num = re.search(r"(-?\d+(?:\.\d+)?)", question)
+            if m_num:
+                val = float(m_num.group(1))
+                fmt = "binary32"
+                if any(w in low for w in ("media", "16", "binary16", "half")):
+                    fmt = "binary16"
+                elif any(w in low for w in ("doble", "64", "binary64", "double")):
+                    fmt = "binary64"
+                res = self.tool_registry.execute("ieee754", value=val, format_name=fmt)
+                if res.success:
+                    hints.append(f"Cálculo IEEE 754 para {val} ({fmt}):\n{res.output}")
+                    tool_data["ieee754"] = res.data
+
+        # 2. Detección de Complemento a Dos / Enteros
+        if any(w in low for w in ("complemento", "ca2", "ca1", "signo y magnitud")):
+            m_num = re.search(r"(-?\d+)", question)
+            m_bits = re.search(r"(\d+)\s*bits?", low)
+            bits = int(m_bits.group(1)) if m_bits else 8
+            if m_num:
+                val = int(m_num.group(1))
+                res = self.tool_registry.execute("integer_representation", value=val, bits=bits)
+                if res.success:
+                    hints.append(f"Representación entera para {val} ({bits} bits):\n{res.output}")
+                    tool_data["integer_representation"] = res.data
+
+        # 3. Operaciones aritméticas / módulo
+        if any(w in low for w in ("mod", "%", "módulo", "modulo", "resto")):
+            m_mod = re.search(r"(\d+)\s*(?:mod|%|módulo|modulo)\s*(\d+)", low)
+            if m_mod:
+                expr = f"{m_mod.group(1)} % {m_mod.group(2)}"
+                res = self.tool_registry.execute("calculator", expression=expr)
+                if res.success:
+                    hints.append(f"Operación módulo calculada: {expr} = {res.output}")
+                    tool_data["calculator"] = res.data
+
+        combined = "\n---\n".join(hints) if hints else None
+        return combined, tool_data
+
     def _generate(
         self,
         context: str,
         question: str,
         history: list[tuple[str, str]] | None = None,
+        pedagogical_mode: str = "auto",
+        strict_mode: bool = False,
+        verification_hint: str | None = None,
     ) -> str:
         try:
-            if history:
-                msg = (CONVERSATIONAL_PROMPT | self.llm).invoke(
-                    {
-                        "history": format_history(history),
-                        "context": context,
-                        "question": question,
-                    }
+            if self.settings.enable_professor:
+                prompt_template = build_professor_prompt(
+                    mode=pedagogical_mode,
+                    strict_mode=strict_mode,
+                    verification_hint=verification_hint,
+                    has_history=bool(history),
                 )
+            elif history:
+                prompt_template = CONVERSATIONAL_PROMPT
             else:
-                msg = (PROMPT | self.llm).invoke({"context": context, "question": question})
+                prompt_template = PROMPT
+
+            chain_input: dict[str, Any] = {"context": context, "question": question}
+            if history:
+                chain_input["history"] = format_history(history)
+
+            msg = (prompt_template | self.llm).invoke(chain_input)
         except _LLM_CONNECTION_ERRORS as exc:
             logger.warning(json.dumps({"event": "llm_error", "error": type(exc).__name__}))
             raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
@@ -176,18 +247,28 @@ class RAGService:
         context: str,
         question: str,
         history: list[tuple[str, str]] | None = None,
+        pedagogical_mode: str = "auto",
+        strict_mode: bool = False,
+        verification_hint: str | None = None,
     ) -> str:
         try:
-            if history:
-                msg = await (CONVERSATIONAL_PROMPT | self.llm).ainvoke(
-                    {
-                        "history": format_history(history),
-                        "context": context,
-                        "question": question,
-                    }
+            if self.settings.enable_professor:
+                prompt_template = build_professor_prompt(
+                    mode=pedagogical_mode,
+                    strict_mode=strict_mode,
+                    verification_hint=verification_hint,
+                    has_history=bool(history),
                 )
+            elif history:
+                prompt_template = CONVERSATIONAL_PROMPT
             else:
-                msg = await (PROMPT | self.llm).ainvoke({"context": context, "question": question})
+                prompt_template = PROMPT
+
+            chain_input: dict[str, Any] = {"context": context, "question": question}
+            if history:
+                chain_input["history"] = format_history(history)
+
+            msg = await (prompt_template | self.llm).ainvoke(chain_input)
         except _LLM_CONNECTION_ERRORS as exc:
             logger.warning(json.dumps({"event": "llm_error", "error": type(exc).__name__}))
             raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
@@ -305,27 +386,35 @@ class RAGService:
         t1: float,
         kb_id: str,
         conversation_id: str | None = None,
+        pedagogical_mode: str = "auto",
+        strict_mode: bool = False,
+        tool_data: dict[str, Any] | None = None,
     ) -> QueryResult:
         generation_ms = int((time.perf_counter() - t1) * 1000)
 
         if NO_EVIDENCE in text:
+            reason = "missing_premise_strict" if strict_mode else "model_refused"
+            msg = MESSAGES.get(reason, MESSAGES["model_refused"])
             self._log(
                 question,
                 retrieval_ms,
                 generation_ms,
                 len(retrieved),
                 len(hits),
-                "model_refused",
+                reason,
                 kb_id=kb_id,
             )
             return QueryResult(
                 None,
                 False,
                 retrieved=retrieved,
-                reason="model_refused",
-                message=MESSAGES["model_refused"],
+                reason=reason,
+                message=msg,
                 knowledge_base_id=kb_id,
                 conversation_id=conversation_id,
+                pedagogical_mode=pedagogical_mode,
+                strict_mode=strict_mode,
+                verification_data=tool_data,
             )
 
         valid_ids = {h.id for h in retrieved}
@@ -349,6 +438,9 @@ class RAGService:
                 message=MESSAGES["no_citations"],
                 knowledge_base_id=kb_id,
                 conversation_id=conversation_id,
+                pedagogical_mode=pedagogical_mode,
+                strict_mode=strict_mode,
+                verification_data=tool_data,
             )
 
         sources = [h for h in retrieved if h.id in cited]
@@ -369,6 +461,9 @@ class RAGService:
             retrieved=retrieved,
             knowledge_base_id=kb_id,
             conversation_id=conversation_id,
+            pedagogical_mode=pedagogical_mode,
+            strict_mode=strict_mode,
+            verification_data=tool_data,
         )
 
     def _finalize_generation(
@@ -383,13 +478,34 @@ class RAGService:
         kb_id: str,
         history: list[tuple[str, str]] | None = None,
         conversation_id: str | None = None,
+        pedagogical_mode: str = "auto",
+        strict_mode: bool = False,
+        verification_hint: str | None = None,
+        tool_data: dict[str, Any] | None = None,
     ) -> QueryResult:
         """Política unificada de validación de citas, reintento guiado, abstención y logging."""
         if NO_EVIDENCE not in text and not extract_citations(text):
             # el modelo olvidó citar: un reintento con recordatorio
-            text = self._generate(context, question + CITATION_REMINDER, history=history)
+            text = self._generate(
+                context,
+                question + CITATION_REMINDER,
+                history=history,
+                pedagogical_mode=pedagogical_mode,
+                strict_mode=strict_mode,
+                verification_hint=verification_hint,
+            )
         return self._postprocess_generation(
-            text, question, retrieved, hits, retrieval_ms, t1, kb_id, conversation_id
+            text,
+            question,
+            retrieved,
+            hits,
+            retrieval_ms,
+            t1,
+            kb_id,
+            conversation_id,
+            pedagogical_mode=pedagogical_mode,
+            strict_mode=strict_mode,
+            tool_data=tool_data,
         )
 
     async def _afinalize_generation(
@@ -404,13 +520,34 @@ class RAGService:
         kb_id: str,
         history: list[tuple[str, str]] | None = None,
         conversation_id: str | None = None,
+        pedagogical_mode: str = "auto",
+        strict_mode: bool = False,
+        verification_hint: str | None = None,
+        tool_data: dict[str, Any] | None = None,
     ) -> QueryResult:
         """Versión asíncrona no bloqueante de finalización para streaming SSE."""
         if NO_EVIDENCE not in text and not extract_citations(text):
             # el modelo olvidó citar: un reintento con recordatorio
-            text = await self._agenerate(context, question + CITATION_REMINDER, history=history)
+            text = await self._agenerate(
+                context,
+                question + CITATION_REMINDER,
+                history=history,
+                pedagogical_mode=pedagogical_mode,
+                strict_mode=strict_mode,
+                verification_hint=verification_hint,
+            )
         return self._postprocess_generation(
-            text, question, retrieved, hits, retrieval_ms, t1, kb_id, conversation_id
+            text,
+            question,
+            retrieved,
+            hits,
+            retrieval_ms,
+            t1,
+            kb_id,
+            conversation_id,
+            pedagogical_mode=pedagogical_mode,
+            strict_mode=strict_mode,
+            tool_data=tool_data,
         )
 
     def answer(
@@ -419,7 +556,20 @@ class RAGService:
         top_k: int | None = None,
         knowledge_base_id: str | None = None,
         conversation_id: str | None = None,
+        pedagogical_mode: str | None = None,
+        strict_mode: bool | None = None,
     ) -> QueryResult:
+        resolved_mode = (
+            pedagogical_mode
+            if pedagogical_mode is not None
+            else self.settings.default_pedagogical_mode
+        )
+        resolved_strict = (
+            strict_mode
+            if strict_mode is not None
+            else self.settings.default_strict_mode
+        )
+
         resolved_kb, history = self._validate_and_resolve_conv_kb(
             conversation_id, knowledge_base_id
         )
@@ -434,6 +584,8 @@ class RAGService:
                 message=msg,
                 knowledge_base_id=kb_id,
                 conversation_id=conversation_id,
+                pedagogical_mode=resolved_mode,
+                strict_mode=resolved_strict,
             )
             self._save_turn(conversation_id, question, result, kb_id)
             return result
@@ -460,13 +612,23 @@ class RAGService:
                 message=msg,
                 knowledge_base_id=kb_id,
                 conversation_id=conversation_id,
+                pedagogical_mode=resolved_mode,
+                strict_mode=resolved_strict,
             )
             self._save_turn(conversation_id, question, result, kb_id)
             return result
 
+        verification_hint, tool_data = self._detect_and_run_tools(search_query)
         context = format_context(hits)
         t1 = time.perf_counter()
-        text = self._generate(context, question, history=history)
+        text = self._generate(
+            context,
+            question,
+            history=history,
+            pedagogical_mode=resolved_mode,
+            strict_mode=resolved_strict,
+            verification_hint=verification_hint,
+        )
         result = self._finalize_generation(
             text,
             context,
@@ -478,6 +640,10 @@ class RAGService:
             kb_id,
             history=history,
             conversation_id=conversation_id,
+            pedagogical_mode=resolved_mode,
+            strict_mode=resolved_strict,
+            verification_hint=verification_hint,
+            tool_data=tool_data,
         )
         self._save_turn(conversation_id, question, result, kb_id)
         return result
@@ -490,12 +656,15 @@ class RAGService:
         cited: list[int] | None = None,
         message: str | None = None,
         conversation_id: str | None = None,
+        pedagogical_mode: str = "auto",
+        strict_mode: bool = False,
+        verification_data: dict[str, Any] | None = None,
     ) -> dict:
         """Evento final del stream. Mismo contrato para éxito y para toda abstención."""
         sources = sources or []
         default_msg = MESSAGES.get(reason) if reason else None
         resolved_msg = message if message is not None else default_msg
-        data = {
+        data: dict[str, Any] = {
             "grounded": reason is None,
             "reason": reason,
             "message": resolved_msg,
@@ -503,6 +672,13 @@ class RAGService:
             "sources": [s.__dict__ for s in sources],
             "cited_ids": cited or [],
         }
+        if pedagogical_mode and pedagogical_mode != "auto":
+            data["pedagogical_mode"] = pedagogical_mode
+            data["strict_mode"] = strict_mode
+        elif strict_mode:
+            data["strict_mode"] = strict_mode
+        if verification_data:
+            data["verification_data"] = verification_data
         if conversation_id is not None:
             data["conversation_id"] = conversation_id
         return {
@@ -516,6 +692,8 @@ class RAGService:
         top_k: int | None = None,
         knowledge_base_id: str | None = None,
         conversation_id: str | None = None,
+        pedagogical_mode: str | None = None,
+        strict_mode: bool | None = None,
     ) -> AsyncIterator[dict]:
         """Transmite la respuesta token a token como eventos Server-Sent Events (SSE).
 
@@ -523,6 +701,17 @@ class RAGService:
         message/answer/sources/cited_ids/conversation_id). `error` queda reservado a fallos
         reales (LLM caído).
         """
+        resolved_mode = (
+            pedagogical_mode
+            if pedagogical_mode is not None
+            else self.settings.default_pedagogical_mode
+        )
+        resolved_strict = (
+            strict_mode
+            if strict_mode is not None
+            else self.settings.default_strict_mode
+        )
+
         resolved_kb, history = self._validate_and_resolve_conv_kb(
             conversation_id, knowledge_base_id
         )
@@ -537,10 +726,16 @@ class RAGService:
                 message=msg,
                 knowledge_base_id=kb_id,
                 conversation_id=conversation_id,
+                pedagogical_mode=resolved_mode,
+                strict_mode=resolved_strict,
             )
             self._save_turn(conversation_id, question, empty_res, kb_id)
             yield self._end_event(
-                "empty_knowledge_base", message=msg, conversation_id=conversation_id
+                "empty_knowledge_base",
+                message=msg,
+                conversation_id=conversation_id,
+                pedagogical_mode=resolved_mode,
+                strict_mode=resolved_strict,
             )
             return
 
@@ -572,9 +767,17 @@ class RAGService:
                 message=msg,
                 knowledge_base_id=kb_id,
                 conversation_id=conversation_id,
+                pedagogical_mode=resolved_mode,
+                strict_mode=resolved_strict,
             )
             self._save_turn(conversation_id, question, below_res, kb_id)
-            yield self._end_event("below_threshold", message=msg, conversation_id=conversation_id)
+            yield self._end_event(
+                "below_threshold",
+                message=msg,
+                conversation_id=conversation_id,
+                pedagogical_mode=resolved_mode,
+                strict_mode=resolved_strict,
+            )
             return
 
         # Notificar fuentes recuperadas inicialmente
@@ -586,17 +789,25 @@ class RAGService:
             },
         }
 
+        verification_hint, tool_data = self._detect_and_run_tools(search_query)
         context = format_context(hits)
-        if history:
-            chain = CONVERSATIONAL_PROMPT | self.llm
-            chain_input = {
-                "history": format_history(history),
-                "context": context,
-                "question": question,
-            }
+
+        if self.settings.enable_professor:
+            prompt_template = build_professor_prompt(
+                mode=resolved_mode,
+                strict_mode=resolved_strict,
+                verification_hint=verification_hint,
+                has_history=bool(history),
+            )
+        elif history:
+            prompt_template = CONVERSATIONAL_PROMPT
         else:
-            chain = PROMPT | self.llm
-            chain_input = {"context": context, "question": question}
+            prompt_template = PROMPT
+
+        chain = prompt_template | self.llm
+        chain_input: dict[str, Any] = {"context": context, "question": question}
+        if history:
+            chain_input["history"] = format_history(history)
 
         full_text = []
         t1 = time.perf_counter()
@@ -637,6 +848,10 @@ class RAGService:
                 kb_id,
                 history=history,
                 conversation_id=conversation_id,
+                pedagogical_mode=resolved_mode,
+                strict_mode=resolved_strict,
+                verification_hint=verification_hint,
+                tool_data=tool_data,
             )
         except LLMUnavailableError as exc:
             self._log(
@@ -660,6 +875,9 @@ class RAGService:
             cited=cited_ids,
             message=result.message,
             conversation_id=conversation_id,
+            pedagogical_mode=resolved_mode,
+            strict_mode=resolved_strict,
+            verification_data=tool_data,
         )
 
     @staticmethod
