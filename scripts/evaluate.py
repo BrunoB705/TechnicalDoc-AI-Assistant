@@ -103,26 +103,17 @@ def main() -> None:
             min_rel = best.min_relevance
 
     test_summary = None
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        vs, eval_settings, kb_svc = build_eval_index(
-            args.corpus,
-            embeddings,
-            Path(tmp),
-            chunk_size=csize,
-            chunk_overlap=coverlap,
-        )
-        summary, outcomes = evaluate_dataset(
-            cases,
-            vs,
-            eval_settings,
-            kb_service=kb_svc,
-            llm=llm,
-            top_k=top_k,
-            min_relevance=min_rel,
-        )
-        if test_cases:
-            test_summary, _ = evaluate_dataset(
-                test_cases,
+    try:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            vs, eval_settings, kb_svc = build_eval_index(
+                args.corpus,
+                embeddings,
+                Path(tmp),
+                chunk_size=csize,
+                chunk_overlap=coverlap,
+            )
+            summary, outcomes = evaluate_dataset(
+                cases,
                 vs,
                 eval_settings,
                 kb_service=kb_svc,
@@ -130,6 +121,38 @@ def main() -> None:
                 top_k=top_k,
                 min_relevance=min_rel,
             )
+            if test_cases:
+                test_summary, _ = evaluate_dataset(
+                    test_cases,
+                    vs,
+                    eval_settings,
+                    kb_service=kb_svc,
+                    llm=llm,
+                    top_k=top_k,
+                    min_relevance=min_rel,
+                )
+    except Exception as exc:
+        if args.with_llm and "LLMUnavailableError" in type(exc).__name__:
+            provider = settings.llm_provider
+            url = (
+                settings.openai_base_url
+                if provider == "openai"
+                else settings.ollama_base_url
+            )
+            target_url = url or "OpenAI Cloud"
+            print(
+                f"\n[ERROR] No se pudo conectar con el servidor LLM ({provider}) en {target_url}.\n"
+                f"Detalle: {exc}\n\n"
+                "Para usar '--with-llm':\n"
+                "  1. Si usás LM Studio: abrilo y hacé clic en 'Start Server' en http://localhost:1234.\n"
+                "  2. Si usás Ollama: ejecutá 'ollama serve' en http://localhost:11434.\n"
+                "  3. Si usás OpenAI en la nube: configurá OPENAI_API_KEY en tu .env.\n\n"
+                "Nota: Podés ejecutar la evaluación de recuperación, umbrales y aislamiento con:\n"
+                "      uv run python scripts/evaluate.py\n",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        raise
 
     args.reports_dir.mkdir(parents=True, exist_ok=True)
     json_path = args.reports_dir / "latest.json"
