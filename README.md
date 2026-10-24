@@ -4,33 +4,6 @@ Asistente RAG para documentación técnica (`.md`, `.txt`, `.pdf`) con aislamien
 
 ---
 
-## 📊 Evaluación Cuantitativa y Calibración RAG
-
-El repositorio incluye un framework reproducible de evaluación (`scripts/evaluate.py` y `app/evaluation/`) sobre un dataset de **45 casos** (`eval/dataset.jsonl`) distribuidos en 3 Knowledge Bases técnicas (`kb-arquitectura`, `kb-redes`, `kb-python`), incluyendo consultas positivas con evidencia, preguntas fuera de dominio (negativas) y preguntas cruzadas entre bases (*cross-KB*).
-
-### Resultados del Benchmark (`intfloat/multilingual-e5-small`)
-
-| Métrica | Valor Obtenido | Descripción |
-|---|---|---|
-| **Recall@k** (`top_k=4`) | **100.00%** (30/30) | Proporción de consultas positivas donde el documento esperado aparece en el Top-K recuperado. |
-| **MRR** (*Mean Reciprocal Rank*) | **1.0000** | El documento fuente correcto se posiciona en el rango `#1` en el 100% de los casos positivos. |
-| **Refusal Accuracy** (Umbral calibrado) | **100.00%** (15/15) | Abstención exacta en consultas sin evidencia (negativas puras y consultas cruzadas a otra KB). |
-| **Aislamiento entre KBs** | **100.00%** (45/45) | Cero fugas de fragmentos (`0` chunks contaminados) entre bases de conocimiento distintas. |
-| **Latencia de Recuperación** | **26.73 ms** (p95: **36.70 ms**) | Búsqueda vectorial local + filtrado por `knowledge_base_id` en ChromaDB. |
-
-> **Nota sobre calibración de `multilingual-e5-small`:** Debido a la anisotropía del espacio coseno en modelos de la familia E5, las similitudes nunca caen cerca de `0.0` (consultas fuera de dominio puntúan `0.71–0.79`, consultas cruzadas entre KBs técnicas puntúan `0.81–0.835` y aciertos reales puntúan `0.839–0.94`). El barrido empírico (`eval/reports/calibration_report.md`) demuestra que `chunk_size=500`, `top_k=3..4` y `min_relevance=0.837` (o `0.80` combinando abstención del LLM vía `NO_EVIDENCE`) maximizan tanto el Recall como la abstención.
-
-Para reproducir la evaluación o ejecutar un barrido de calibración:
-```powershell
-# Evaluación estándar con reporte en eval/reports/latest_report.md
-uv run python scripts/evaluate.py
-
-# Barrido de hiperparámetros (chunk_size x top_k x min_relevance)
-uv run python scripts/evaluate.py --calibrate
-```
-
----
-
 ## 🚀 Inicio Rápido
 
 ### 1. Requisitos
@@ -166,3 +139,30 @@ uv run ruff check .
 - [x] **Fase 7**: Evaluación cuantitativa RAG (Recall@k, MRR, abstención, aislamiento y calibración de umbrales).
 - [x] **Fase 8**: Reproducibilidad, CI/CD y contenerización (Docker, GitHub Actions, corpus demo).
 - [x] **Fase 9**: Hardening para demo pública (`READ_ONLY_MODE`, `/health/live`, `/health/ready` y documentación de portfolio).
+
+---
+
+## 📊 Evaluación Cuantitativa y Calibración RAG
+
+El repositorio incluye un framework reproducible de evaluación (`scripts/evaluate.py` y `app/evaluation/`) sobre un dataset de **45 casos** (`eval/dataset.jsonl`) distribuidos en 3 Knowledge Bases técnicas (`kb-arquitectura`, `kb-redes`, `kb-python`), incluyendo consultas positivas con evidencia, preguntas fuera de dominio (negativas) y preguntas cruzadas entre bases (*cross-KB*).
+
+### Resultados del Benchmark (`intfloat/multilingual-e5-small`)
+
+| Métrica | Valor Obtenido | Descripción |
+|---|---|---|
+| **Recall@k** (`top_k=4`) | **100.00%** (30/30) | Proporción de consultas positivas donde el documento esperado aparece en el Top-K recuperado. |
+| **MRR** (*Mean Reciprocal Rank*) | **1.0000** | El documento fuente correcto se posiciona en el rango `#1` en el 100% de los casos positivos. |
+| **Refusal Accuracy** (Umbral calibrado) | **100.00%** (15/15) | Abstención exacta en consultas sin evidencia (negativas puras y consultas cruzadas a otra KB). |
+| **Aislamiento entre KBs** | **100.00%** (45/45) | Cero fugas de fragmentos (`0` chunks contaminados) entre bases de conocimiento distintas. |
+| **Latencia de Recuperación** | **26.73 ms** (p95: **36.70 ms**) | Búsqueda vectorial local + filtrado por `knowledge_base_id` en ChromaDB. |
+
+> **Nota sobre calibración de `multilingual-e5-small`:** Debido a la anisotropía del espacio coseno en modelos de la familia E5, las similitudes nunca caen cerca de `0.0` (consultas fuera de dominio puntúan `0.71–0.79`, consultas cruzadas entre KBs técnicas puntúan `0.81–0.835` y aciertos reales puntúan `0.839–0.94`). El barrido empírico (`eval/reports/calibration_report.md`) demuestra que `chunk_size=500`, `top_k=3..4` y `min_relevance=0.837` (o `0.80` combinando abstención del LLM vía `NO_EVIDENCE`) maximizan tanto el Recall como la abstención.
+
+Para reproducir la evaluación o ejecutar un barrido de calibración:
+```powershell
+# Evaluación estándar con reporte en eval/reports/latest_report.md
+uv run python scripts/evaluate.py
+
+# Barrido de hiperparámetros (chunk_size x top_k x min_relevance)
+uv run python scripts/evaluate.py --calibrate
+```
