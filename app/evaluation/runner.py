@@ -104,9 +104,7 @@ def evaluate_dataset(
 
         kept = [(doc, score) for doc, score in found if score >= threshold]
         retrieved_sources = [doc.metadata.get("source", "") for doc, _ in kept]
-        retrieved_kbs = [
-            doc.metadata.get("knowledge_base_id", "general") for doc, _ in found
-        ]
+        retrieved_kbs = [doc.metadata.get("knowledge_base_id", "general") for doc, _ in found]
         top_score = float(found[0][1]) if found else None
 
         generation_ms = 0.0
@@ -126,9 +124,7 @@ def evaluate_dataset(
             if not abstained:
                 rag = RAGService(vectorstore, llm, eval_settings, kb_service=kb_service)
                 t1 = time.perf_counter()
-                res = rag.answer(
-                    case.question, top_k=k, knowledge_base_id=case.knowledge_base_id
-                )
+                res = rag.answer(case.question, top_k=k, knowledge_base_id=case.knowledge_base_id)
                 generation_ms = (time.perf_counter() - t1) * 1000.0
                 abstained = not res.grounded
                 abstention_reason = res.reason
@@ -186,9 +182,7 @@ def _outcomes_from_cached(
         found = found_all[:top_k]
         kept = [(doc, score) for doc, score in found if score >= threshold]
         retrieved_sources = [doc.metadata.get("source", "") for doc, _ in kept]
-        retrieved_kbs = [
-            doc.metadata.get("knowledge_base_id", "general") for doc, _ in found
-        ]
+        retrieved_kbs = [doc.metadata.get("knowledge_base_id", "general") for doc, _ in found]
         top_score = float(found[0][1]) if found else None
         abstained = len(kept) == 0
         leaked = any(kb != case.knowledge_base_id for kb in retrieved_kbs)
@@ -298,8 +292,7 @@ def format_markdown_report(
         "|---|---|---|",
         f"| **Recall@k (Hit@k)** | `{baseline.recall_at_k:.2%}` | "
         "% de preguntas positivas con el documento esperado en top-k |",
-        f"| **MRR** | `{baseline.mrr:.4f}` | "
-        "Mean Reciprocal Rank del documento fuente esperado |",
+        f"| **MRR** | `{baseline.mrr:.4f}` | Mean Reciprocal Rank del documento fuente esperado |",
         f"| **Refusal Accuracy** | `{baseline.refusal_accuracy:.2%}` | "
         "Tasa global de abstención correcta (negativas + cross-KB) |",
         f"| **Abstención Negativas** | `{baseline.negative_refusal_rate:.2%}` | "

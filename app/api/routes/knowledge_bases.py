@@ -83,10 +83,7 @@ def list_kb_documents(
     kb_id: str,
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentListResponse:
-    docs = [
-        DocumentResponse(**asdict(d))
-        for d in service.list_documents(knowledge_base_id=kb_id)
-    ]
+    docs = [DocumentResponse(**asdict(d)) for d in service.list_documents(knowledge_base_id=kb_id)]
     return DocumentListResponse(total=len(docs), documents=docs)
 
 

@@ -85,7 +85,7 @@ def _stem_word(word: str) -> str:
     w = word.lower().strip()
     for suff in _SPANISH_SUFFIXES:
         if len(w) > len(suff) + 3 and w.endswith(suff):
-            return w[:-len(suff)]
+            return w[: -len(suff)]
     return w
 
 
@@ -219,8 +219,7 @@ def aggregate_outcomes(outcomes: list[CaseOutcome]) -> EvalSummary:
 
     hits = [1.0 for o in positives if not o.abstained and o.rank is not None]
     rr_values = [
-        (1.0 / o.rank) if (not o.abstained and o.rank is not None) else 0.0
-        for o in positives
+        (1.0 / o.rank) if (not o.abstained and o.rank is not None) else 0.0 for o in positives
     ]
     false_abstentions = [1.0 for o in positives if o.abstained]
 
@@ -229,19 +228,11 @@ def aggregate_outcomes(outcomes: list[CaseOutcome]) -> EvalSummary:
     false_abst_val = sum(false_abstentions) / len(positives) if positives else 0.0
 
     refusal_acc = (
-        sum(1.0 for o in abstentions if o.abstained) / len(abstentions)
-        if abstentions
-        else 1.0
+        sum(1.0 for o in abstentions if o.abstained) / len(abstentions) if abstentions else 1.0
     )
-    neg_refusal = (
-        sum(1.0 for o in negatives if o.abstained) / len(negatives)
-        if negatives
-        else 1.0
-    )
+    neg_refusal = sum(1.0 for o in negatives if o.abstained) / len(negatives) if negatives else 1.0
     cross_refusal = (
-        sum(1.0 for o in cross_kbs if o.abstained) / len(cross_kbs)
-        if cross_kbs
-        else 1.0
+        sum(1.0 for o in cross_kbs if o.abstained) / len(cross_kbs) if cross_kbs else 1.0
     )
 
     isolation = sum(1.0 for o in outcomes if not o.leaked_cross_kb) / len(outcomes)
@@ -259,12 +250,8 @@ def aggregate_outcomes(outcomes: list[CaseOutcome]) -> EvalSummary:
     cit_val: float | None = None
     end_to_end: float | None = None
     if evaluated_llm and positives:
-        ans_corr = round(
-            sum(1.0 for o in positives if o.answer_correct) / len(positives), 4
-        )
-        cit_val = round(
-            sum(1.0 for o in positives if o.citations_valid) / len(positives), 4
-        )
+        ans_corr = round(sum(1.0 for o in positives if o.answer_correct) / len(positives), 4)
+        cit_val = round(sum(1.0 for o in positives if o.citations_valid) / len(positives), 4)
         # Índice End-to-End integrando recuperación, abstención, exactitud y fundamentación
         end_to_end = round(
             (

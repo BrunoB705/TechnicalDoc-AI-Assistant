@@ -118,6 +118,18 @@ class RAGService:
             raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
         return str(msg.content).strip() or question
 
+    async def _acondense_question(self, history: list[tuple[str, str]], question: str) -> str:
+        if not history:
+            return question
+        try:
+            msg = await (CONDENSE_PROMPT | self.llm).ainvoke(
+                {"history": format_history(history), "question": question}
+            )
+        except _LLM_CONNECTION_ERRORS as exc:
+            logger.warning(json.dumps({"event": "llm_error", "error": type(exc).__name__}))
+            raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
+        return str(msg.content).strip() or question
+
     def _generate(
         self,
         context: str,
@@ -135,6 +147,28 @@ class RAGService:
                 )
             else:
                 msg = (PROMPT | self.llm).invoke({"context": context, "question": question})
+        except _LLM_CONNECTION_ERRORS as exc:
+            logger.warning(json.dumps({"event": "llm_error", "error": type(exc).__name__}))
+            raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
+        return str(msg.content).strip()
+
+    async def _agenerate(
+        self,
+        context: str,
+        question: str,
+        history: list[tuple[str, str]] | None = None,
+    ) -> str:
+        try:
+            if history:
+                msg = await (CONVERSATIONAL_PROMPT | self.llm).ainvoke(
+                    {
+                        "history": format_history(history),
+                        "context": context,
+                        "question": question,
+                    }
+                )
+            else:
+                msg = await (PROMPT | self.llm).ainvoke({"context": context, "question": question})
         except _LLM_CONNECTION_ERRORS as exc:
             logger.warning(json.dumps({"event": "llm_error", "error": type(exc).__name__}))
             raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
@@ -222,23 +256,17 @@ class RAGService:
         retrieved = [_to_hit(i, d, s) for i, (d, s) in enumerate(hits, start=1)]
         return hits, retrieved, retrieval_ms
 
-    def _finalize_generation(
+    def _postprocess_generation(
         self,
         text: str,
-        context: str,
         question: str,
         retrieved: list[SourceHit],
         hits: list[tuple[Document, float]],
         retrieval_ms: int,
         t1: float,
         kb_id: str,
-        history: list[tuple[str, str]] | None = None,
         conversation_id: str | None = None,
     ) -> QueryResult:
-        """Política unificada de validación de citas, reintento guiado, abstención y logging."""
-        if NO_EVIDENCE not in text and not extract_citations(text):
-            # el modelo olvidó citar: un reintento con recordatorio
-            text = self._generate(context, question + CITATION_REMINDER, history=history)
         generation_ms = int((time.perf_counter() - t1) * 1000)
 
         if NO_EVIDENCE in text:
@@ -302,6 +330,48 @@ class RAGService:
             retrieved=retrieved,
             knowledge_base_id=kb_id,
             conversation_id=conversation_id,
+        )
+
+    def _finalize_generation(
+        self,
+        text: str,
+        context: str,
+        question: str,
+        retrieved: list[SourceHit],
+        hits: list[tuple[Document, float]],
+        retrieval_ms: int,
+        t1: float,
+        kb_id: str,
+        history: list[tuple[str, str]] | None = None,
+        conversation_id: str | None = None,
+    ) -> QueryResult:
+        """Política unificada de validación de citas, reintento guiado, abstención y logging."""
+        if NO_EVIDENCE not in text and not extract_citations(text):
+            # el modelo olvidó citar: un reintento con recordatorio
+            text = self._generate(context, question + CITATION_REMINDER, history=history)
+        return self._postprocess_generation(
+            text, question, retrieved, hits, retrieval_ms, t1, kb_id, conversation_id
+        )
+
+    async def _afinalize_generation(
+        self,
+        text: str,
+        context: str,
+        question: str,
+        retrieved: list[SourceHit],
+        hits: list[tuple[Document, float]],
+        retrieval_ms: int,
+        t1: float,
+        kb_id: str,
+        history: list[tuple[str, str]] | None = None,
+        conversation_id: str | None = None,
+    ) -> QueryResult:
+        """Versión asíncrona no bloqueante de finalización para streaming SSE."""
+        if NO_EVIDENCE not in text and not extract_citations(text):
+            # el modelo olvidó citar: un reintento con recordatorio
+            text = await self._agenerate(context, question + CITATION_REMINDER, history=history)
+        return self._postprocess_generation(
+            text, question, retrieved, hits, retrieval_ms, t1, kb_id, conversation_id
         )
 
     def answer(
@@ -430,7 +500,7 @@ class RAGService:
             return
 
         try:
-            search_query = self._condense_question(history, question)
+            search_query = await self._acondense_question(history, question)
         except LLMUnavailableError as exc:
             self._log(question, 0, 0, 0, 0, "llm_unavailable", kb_id=kb_id)
             yield {"event": "error", "data": {"error": "llm_unavailable", "detail": str(exc)}}
@@ -505,7 +575,7 @@ class RAGService:
 
         accumulated = "".join(full_text).strip()
         try:
-            result = self._finalize_generation(
+            result = await self._afinalize_generation(
                 accumulated,
                 context,
                 question,

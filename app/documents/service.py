@@ -123,9 +123,7 @@ class DocumentService:
         res = self._vs.get(where={"doc_id": doc_id}, include=["metadatas"])
         docs = self._group(res.get("metadatas") or [], kb_id)
         if not docs:
-            raise DocumentNotFoundError(
-                f"No existe el documento '{doc_id}' en la base '{kb_id}'."
-            )
+            raise DocumentNotFoundError(f"No existe el documento '{doc_id}' en la base '{kb_id}'.")
         return docs[0]
 
     def _ids_for_kb(self, where: dict, kb_id: str) -> list[str]:
@@ -206,9 +204,7 @@ class DocumentService:
                 raise
             raise InvalidDocumentError(f"No se pudo procesar el archivo: {exc}") from exc
 
-    def _rollback(
-        self, doc_id: str, kb_id: str, target: Path, backup: bytes | None
-    ) -> None:
+    def _rollback(self, doc_id: str, kb_id: str, target: Path, backup: bytes | None) -> None:
         """Deshace un alta fallida en la KB actual sin afectar a otras KBs."""
         try:
             ids = self._ids_for_kb({"doc_id": doc_id}, kb_id)
@@ -221,9 +217,7 @@ class DocumentService:
                 target.write_bytes(backup)
 
     # ---- baja ----
-    def delete_document(
-        self, doc_id: str, knowledge_base_id: str | None = None
-    ) -> None:
+    def delete_document(self, doc_id: str, knowledge_base_id: str | None = None) -> None:
         self._check_writable()
         kb_id = self._resolve_kb(knowledge_base_id)
         info = self.get_document(doc_id, knowledge_base_id=kb_id)

@@ -81,9 +81,7 @@ def main() -> None:
     embeddings = get_embeddings(settings, lazy=False)
     cases = load_dataset(args.dataset)
     test_cases = (
-        load_dataset(args.test_dataset)
-        if args.test_dataset and args.test_dataset.exists()
-        else []
+        load_dataset(args.test_dataset) if args.test_dataset and args.test_dataset.exists() else []
     )
     llm = get_llm(settings) if args.with_llm else None
 
@@ -135,11 +133,7 @@ def main() -> None:
     except Exception as exc:
         if args.with_llm and "LLMUnavailableError" in type(exc).__name__:
             provider = settings.llm_provider
-            url = (
-                settings.openai_base_url
-                if provider == "openai"
-                else settings.ollama_base_url
-            )
+            url = settings.openai_base_url if provider == "openai" else settings.ollama_base_url
             target_url = url or "OpenAI Cloud"
             print(
                 f"\n[ERROR] No se pudo conectar con el servidor LLM ({provider}) en {target_url}.\n"
@@ -162,9 +156,7 @@ def main() -> None:
         "min_relevance": min_rel,
         "llm_provider": settings.llm_provider,
         "llm_model": (
-            settings.openai_model
-            if settings.llm_provider == "openai"
-            else settings.ollama_model
+            settings.openai_model if settings.llm_provider == "openai" else settings.ollama_model
         ),
         "embedding_model": settings.embedding_model,
     }

@@ -29,9 +29,11 @@ class ConversationService:
 
     def _connect(self) -> sqlite3.Connection:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path)
+        conn = sqlite3.connect(self._db_path, timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
         return conn
 
     def _init_db(self) -> None:
@@ -78,9 +80,9 @@ class ConversationService:
     ) -> ConversationSummary:
         self._check_writable()
         conv_id = uuid.uuid4().hex
-        clean_title = (
-            title.strip() if title and title.strip() else DEFAULT_CONVERSATION_TITLE
-        )[:120]
+        clean_title = (title.strip() if title and title.strip() else DEFAULT_CONVERSATION_TITLE)[
+            :120
+        ]
         resolved_kb_id = kb_id or self._settings.default_kb_id
         now = datetime.now(UTC).isoformat()
 
@@ -139,9 +141,7 @@ class ConversationService:
                 (conversation_id,),
             ).fetchone()
             if not row:
-                raise ConversationNotFoundError(
-                    f"No existe la conversación '{conversation_id}'."
-                )
+                raise ConversationNotFoundError(f"No existe la conversación '{conversation_id}'.")
 
             msg_rows = conn.execute(
                 """
@@ -185,9 +185,7 @@ class ConversationService:
         self._check_writable()
         clean_title = title.strip()
         if not clean_title:
-            raise InvalidConversationError(
-                "El título de la conversación no puede estar vacío."
-            )
+            raise InvalidConversationError("El título de la conversación no puede estar vacío.")
         clean_title = clean_title[:120]
         now = datetime.now(UTC).isoformat()
 
@@ -197,9 +195,7 @@ class ConversationService:
                 (conversation_id,),
             ).fetchone()
             if not row:
-                raise ConversationNotFoundError(
-                    f"No existe la conversación '{conversation_id}'."
-                )
+                raise ConversationNotFoundError(f"No existe la conversación '{conversation_id}'.")
 
             conn.execute(
                 "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
@@ -229,9 +225,7 @@ class ConversationService:
                 (conversation_id,),
             ).fetchone()
             if not row:
-                raise ConversationNotFoundError(
-                    f"No existe la conversación '{conversation_id}'."
-                )
+                raise ConversationNotFoundError(f"No existe la conversación '{conversation_id}'.")
             conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
             conn.commit()
 
@@ -258,9 +252,7 @@ class ConversationService:
                 (conversation_id,),
             ).fetchone()
             if not row:
-                raise ConversationNotFoundError(
-                    f"No existe la conversación '{conversation_id}'."
-                )
+                raise ConversationNotFoundError(f"No existe la conversación '{conversation_id}'.")
 
             if row["last_kb_id"] != kb_id:
                 raise InvalidConversationError(
@@ -281,9 +273,7 @@ class ConversationService:
 
             # Insertar mensaje del asistente
             assistant_content = (
-                answer
-                if (answer is not None and answer.strip())
-                else (message or "")
+                answer if (answer is not None and answer.strip()) else (message or "")
             )
             conn.execute(
                 """
@@ -334,9 +324,7 @@ class ConversationService:
                 (conversation_id,),
             ).fetchone()
             if not row:
-                raise ConversationNotFoundError(
-                    f"No existe la conversación '{conversation_id}'."
-                )
+                raise ConversationNotFoundError(f"No existe la conversación '{conversation_id}'.")
 
             limit_exchanges = (
                 max_exchanges

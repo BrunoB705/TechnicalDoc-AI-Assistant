@@ -48,9 +48,7 @@ def main() -> None:
             kb_id=args.kb,
         )
 
-    n_docs, n_chunks = ingest_directory(
-        args.directory, vs, settings, knowledge_base_id=args.kb
-    )
+    n_docs, n_chunks = ingest_directory(args.directory, vs, settings, knowledge_base_id=args.kb)
     print(f"Indexados {n_docs} documentos / {n_chunks} chunks en KB '{args.kb}'")
 
 

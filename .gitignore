@@ -12,7 +12,7 @@ data/docs/*
 !data/docs/.gitkeep
 data/demo_docs/
 eval/reports/
-data/catalog.sqlite3
+data/catalog.sqlite3*
 .postman/
 postman/
 docs/

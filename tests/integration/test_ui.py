@@ -68,9 +68,6 @@ def test_app_js_guards_upload_and_mutations_during_retraining(client):
     assert "readOnlyMode || isRetraining" in js
 
 
-
-
-
 def test_app_js_resets_conversation_on_kb_change(client):
     r = client.get("/static/app.js")
     assert r.status_code == 200

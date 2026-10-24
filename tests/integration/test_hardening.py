@@ -101,9 +101,7 @@ def test_read_only_mode_allows_reads_and_queries(readonly_client):
     assert readonly_client.get("/knowledge-bases").status_code == 200
     assert readonly_client.get("/knowledge-bases/general/documents").status_code == 200
 
-    q = readonly_client.post(
-        "/query", json={"question": "¿Cuál es el puerto por defecto?"}
-    )
+    q = readonly_client.post("/query", json={"question": "¿Cuál es el puerto por defecto?"})
     assert q.status_code == 200
     assert q.json()["grounded"] is True
 
@@ -125,9 +123,7 @@ def test_rate_limiter_blocks_excess_queries_with_429(client, vectorstore, settin
     reset_rate_limiter()
 
 
-def test_stream_applies_same_citation_retry_policy_as_sync_query(
-    client, vectorstore, settings
-):
+def test_stream_applies_same_citation_retry_policy_as_sync_query(client, vectorstore, settings):
     reset_rate_limiter()
     llm = FakeListChatModel(responses=["Respuesta inicial sin citas.", "Respuesta corregida [2]."])
     use_llm(client, vectorstore, settings, llm)

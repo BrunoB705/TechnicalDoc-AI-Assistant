@@ -77,8 +77,10 @@ def test_delete_unknown_returns_404(docs_client):
     assert r.status_code == 404
     assert r.json()["error"] == "document_not_found"
 
+
 def test_documents_are_listed_from_newest_to_oldest(docs_client):
     import time
+
     upload(docs_client, "primero.txt", b"primer archivo subido")
     time.sleep(0.05)
     upload(docs_client, "segundo.txt", b"segundo archivo subido")

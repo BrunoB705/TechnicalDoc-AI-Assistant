@@ -162,9 +162,7 @@ def ingest_demo_corpus(demo_dir: Path) -> dict[str, tuple[int, int]]:
             if f.is_file():
                 shutil.copyfile(f, kb_docs_dir / f.name)
 
-        n_docs, n_chunks = ingest_directory(
-            kb_docs_dir, vs, settings, knowledge_base_id=kb_id
-        )
+        n_docs, n_chunks = ingest_directory(kb_docs_dir, vs, settings, knowledge_base_id=kb_id)
         stats[kb_id] = (n_docs, n_chunks)
     return stats
 

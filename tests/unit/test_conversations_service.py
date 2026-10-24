@@ -65,9 +65,7 @@ def test_record_turn_auto_titling_and_history(conv_service):
 
 def test_record_turn_rejects_cross_kb(conv_service):
     c = conv_service.create_conversation(title="Chat Ops", kb_id="ops")
-    with pytest.raises(
-        InvalidConversationError, match="pertenece a la base 'ops', no a 'general'"
-    ):
+    with pytest.raises(InvalidConversationError, match="pertenece a la base 'ops', no a 'general'"):
         conv_service.record_turn(
             conversation_id=c.id,
             question="¿Pregunta cruzada?",

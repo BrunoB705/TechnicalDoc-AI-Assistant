@@ -32,28 +32,75 @@ class DomainKeywordEmbeddings(Embeddings):
 
     GROUPS = (
         (
-            "cache", "caché", "l1", "l2", "l3", "lru", "fifo",
-            "write-through", "write-back", "correspondencia",
+            "cache",
+            "caché",
+            "l1",
+            "l2",
+            "l3",
+            "lru",
+            "fifo",
+            "write-through",
+            "write-back",
+            "correspondencia",
         ),
         (
-            "complemento", "ieee", "754", "exponente", "mantisa",
-            "overflow", "alu", "signo", "banderas",
+            "complemento",
+            "ieee",
+            "754",
+            "exponente",
+            "mantisa",
+            "overflow",
+            "alu",
+            "signo",
+            "banderas",
         ),
         (
-            "pipeline", "risc", "raw", "forwarding", "estructural",
-            "load-use", "predictor", "etapas", "saltos", "instruction decode",
+            "pipeline",
+            "risc",
+            "raw",
+            "forwarding",
+            "estructural",
+            "load-use",
+            "predictor",
+            "etapas",
+            "saltos",
+            "instruction decode",
         ),
         (
-            "fastapi", "puerto", "8000", "question", "top_k", "no_evidence",
-            "llm_timeout", "stream", "citas", "cita", "model_refused",
+            "fastapi",
+            "puerto",
+            "8000",
+            "question",
+            "top_k",
+            "no_evidence",
+            "llm_timeout",
+            "stream",
+            "citas",
+            "cita",
+            "model_refused",
         ),
         (
-            "e5-small", "sha-256", "doc_id", "64 kb", "_rollback",
-            "upload_chunk_size", "5461", "sqlite", "embeddings", "catalog.sqlite3",
+            "e5-small",
+            "sha-256",
+            "doc_id",
+            "64 kb",
+            "_rollback",
+            "upload_chunk_size",
+            "5461",
+            "sqlite",
+            "embeddings",
+            "catalog.sqlite3",
         ),
         (
-            "python 3.12", "2 gb", "openai_base_url", "max_upload_mb",
-            "ingest.py", "10 minutos", "logger", "uvicorn", "data/chroma",
+            "python 3.12",
+            "2 gb",
+            "openai_base_url",
+            "max_upload_mb",
+            "ingest.py",
+            "10 minutos",
+            "logger",
+            "uvicorn",
+            "data/chroma",
         ),
     )
 
@@ -213,9 +260,7 @@ def test_evaluate_dataset_and_calibration_grid_offline(tmp_path):
     assert len(grid) == 8
     assert grid[0].summary.composite_score >= grid[-1].summary.composite_score
 
-    md = format_markdown_report(
-        summary, outcomes, calibration=grid, test_summary=ret_summary
-    )
+    md = format_markdown_report(summary, outcomes, calibration=grid, test_summary=ret_summary)
     assert "Recall@k" in md
     assert "Calibración Empírica" in md
     assert "Held-Out Test Set" in md

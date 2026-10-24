@@ -39,8 +39,11 @@ class KnowledgeBaseService:
 
     def _connect(self) -> sqlite3.Connection:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path)
+        conn = sqlite3.connect(self._db_path, timeout=5.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
         return conn
 
     def _init_catalog(self) -> None:
@@ -143,9 +146,7 @@ class KnowledgeBaseService:
                 (kb_id,),
             ).fetchone()
         if not row:
-            raise KnowledgeBaseNotFoundError(
-                f"No existe la base de conocimiento '{kb_id}'."
-            )
+            raise KnowledgeBaseNotFoundError(f"No existe la base de conocimiento '{kb_id}'.")
         stats = self._stats_by_kb()
         n_docs, n_chunks = stats.get(kb_id, (0, 0))
         return KnowledgeBase(
@@ -209,9 +210,7 @@ class KnowledgeBaseService:
     def delete_knowledge_base(self, kb_id: str) -> None:
         self._check_writable()
         if kb_id == self._settings.default_kb_id:
-            raise InvalidKnowledgeBaseError(
-                f"No se puede eliminar la base por defecto '{kb_id}'."
-            )
+            raise InvalidKnowledgeBaseError(f"No se puede eliminar la base por defecto '{kb_id}'.")
         self.get_knowledge_base(kb_id)  # verifica existencia (404 si no existe)
 
         # 1. Eliminar vectores asociados en ChromaDB
