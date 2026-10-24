@@ -20,8 +20,8 @@ def test_settings_defaults_and_env_overrides(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
     s_default = Settings(_env_file=None)
-    assert s_default.chunk_size == 500
-    assert s_default.chunk_overlap == 75
+    assert s_default.chunk_size == 650
+    assert s_default.chunk_overlap == 100
     assert s_default.top_k == 4
     assert s_default.min_relevance == 0.80
     assert s_default.read_only_mode is False

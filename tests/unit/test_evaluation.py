@@ -120,6 +120,16 @@ def test_generation_quality_checks_answer_and_citation_validity():
         "Tiene tres niveles (L1, L2 y L3) y latencia de 1 a 4 ciclos [1].",
         "Tres niveles (L1, L2 y L3); la caché L1 tiene una latencia de 1 a 4 ciclos de reloj.",
     )
+    # Variación morfológica y sinónimos (caso q15: fallos/fallar, consecutivos/consecutivas)
+    ans_q15 = (
+        "El predictor de 2 bits con saturación necesita dos fallos consecutivos para "
+        "cambiar su predicción, mejorando el rendimiento en bucles [1]."
+    )
+    exp_q15 = (
+        "Requiere fallar dos veces consecutivas antes de cambiar su predicción, "
+        "mejorando el desempeño en bucles."
+    )
+    assert check_answer_correctness(ans_q15, exp_q15)
     assert not check_answer_correctness(
         "El servidor usa HTTP.",
         "Tres niveles (L1, L2 y L3); la caché L1 tiene una latencia de 1 a 4 ciclos de reloj.",

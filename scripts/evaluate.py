@@ -103,6 +103,7 @@ def main() -> None:
             min_rel = best.min_relevance
 
     test_summary = None
+    test_outcomes = []
     try:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             vs, eval_settings, kb_svc = build_eval_index(
@@ -122,7 +123,7 @@ def main() -> None:
                 min_relevance=min_rel,
             )
             if test_cases:
-                test_summary, _ = evaluate_dataset(
+                test_summary, test_outcomes = evaluate_dataset(
                     test_cases,
                     vs,
                     eval_settings,
@@ -154,20 +155,42 @@ def main() -> None:
             sys.exit(1)
         raise
 
+    active_cfg = {
+        "chunk_size": csize,
+        "chunk_overlap": coverlap,
+        "top_k": top_k,
+        "min_relevance": min_rel,
+        "llm_provider": settings.llm_provider,
+        "llm_model": (
+            settings.openai_model
+            if settings.llm_provider == "openai"
+            else settings.ollama_model
+        ),
+        "embedding_model": settings.embedding_model,
+    }
+
     args.reports_dir.mkdir(parents=True, exist_ok=True)
     json_path = args.reports_dir / "latest.json"
     cal_md_path = args.reports_dir / "calibration_report.md"
     latest_md_path = args.reports_dir / "latest_report.md"
 
-    payload = serialize_report(summary, outcomes, calibration, test_summary=test_summary)
+    payload = serialize_report(
+        summary,
+        outcomes,
+        calibration,
+        test_summary=test_summary,
+        test_outcomes=test_outcomes,
+        config_params=active_cfg,
+    )
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     md = format_markdown_report(
         summary,
         outcomes,
         calibration=calibration,
-        config_params={"chunk_size": csize, "top_k": top_k, "min_relevance": min_rel},
+        config_params=active_cfg,
         test_summary=test_summary,
+        test_outcomes=test_outcomes,
     )
     cal_md_path.write_text(md, encoding="utf-8")
     latest_md_path.write_text(md, encoding="utf-8")

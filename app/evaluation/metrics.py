@@ -43,7 +43,50 @@ _STOPWORDS = {
     "cada",
     "cuando",
     "donde",
+    "muy",
+    "mas",
+    "más",
+    "pero",
 }
+
+_SPANISH_SUFFIXES = (
+    "amente",
+    "ciones",
+    "cion",
+    "ción",
+    "ados",
+    "adas",
+    "idos",
+    "idas",
+    "ando",
+    "iendo",
+    "ivas",
+    "ivos",
+    "iva",
+    "ivo",
+    "ado",
+    "ada",
+    "ido",
+    "ida",
+    "ar",
+    "er",
+    "ir",
+    "as",
+    "es",
+    "os",
+    "a",
+    "e",
+    "o",
+)
+
+
+def _stem_word(word: str) -> str:
+    """Lematización ligera de sufijos comunes en español."""
+    w = word.lower().strip()
+    for suff in _SPANISH_SUFFIXES:
+        if len(w) > len(suff) + 3 and w.endswith(suff):
+            return w[:-len(suff)]
+    return w
 
 
 @dataclass
@@ -72,6 +115,8 @@ class CaseOutcome:
     cited_sources: list[str] | None = None
     answer_correct: bool | None = None
     citations_valid: bool | None = None
+    abstention_reason: str | None = None
+    abstention_message: str | None = None
 
 
 @dataclass
@@ -93,6 +138,7 @@ class EvalSummary:
     evaluated_with_llm: bool = False
     answer_correctness: float | None = None
     citation_validity_rate: float | None = None
+    end_to_end_score: float | None = None
 
 
 def compute_rank(retrieved_sources: list[str], expected_source: str | None) -> int | None:
@@ -119,9 +165,13 @@ def reciprocal_rank(retrieved_sources: list[str], expected_source: str | None) -
     return (1.0 / r) if r is not None else 0.0
 
 
-def _tokenize_keywords(text: str) -> set[str]:
+def _extract_stemmed_keywords(text: str) -> set[str]:
     words = re.findall(r"[a-zA-Z0-9áéíóúñÁÉÍÓÚÑ_.-]+", text.lower())
-    return {w for w in words if len(w) >= 2 and w not in _STOPWORDS}
+    stems = set()
+    for w in words:
+        if len(w) >= 2 and w not in _STOPWORDS:
+            stems.add(_stem_word(w))
+    return stems
 
 
 def check_answer_correctness(generated: str | None, expected: str | None) -> bool:
@@ -130,11 +180,11 @@ def check_answer_correctness(generated: str | None, expected: str | None) -> boo
         return generated is None
     if not generated:
         return False
-    expected_tokens = _tokenize_keywords(expected)
-    if not expected_tokens:
+    expected_stems = _extract_stemmed_keywords(expected)
+    if not expected_stems:
         return True
-    gen_tokens = _tokenize_keywords(generated)
-    overlap = len(expected_tokens & gen_tokens) / len(expected_tokens)
+    gen_stems = _extract_stemmed_keywords(generated)
+    overlap = len(expected_stems & gen_stems) / len(expected_stems)
     return overlap >= 0.35
 
 
@@ -207,6 +257,7 @@ def aggregate_outcomes(outcomes: list[CaseOutcome]) -> EvalSummary:
     )
     ans_corr: float | None = None
     cit_val: float | None = None
+    end_to_end: float | None = None
     if evaluated_llm and positives:
         ans_corr = round(
             sum(1.0 for o in positives if o.answer_correct) / len(positives), 4
@@ -214,8 +265,20 @@ def aggregate_outcomes(outcomes: list[CaseOutcome]) -> EvalSummary:
         cit_val = round(
             sum(1.0 for o in positives if o.citations_valid) / len(positives), 4
         )
+        # Índice End-to-End integrando recuperación, abstención, exactitud y fundamentación
+        end_to_end = round(
+            (
+                0.30 * recall_val
+                + 0.20 * mrr_val
+                + 0.20 * refusal_acc
+                + 0.15 * ans_corr
+                + 0.15 * cit_val
+            )
+            * isolation,
+            4,
+        )
 
-    # Puntaje compuesto ponderado para calibración:
+    # Puntaje compuesto de recuperación y abstención:
     # 45% Recall@k + 25% MRR + 30% Refusal Accuracy, penalizado si falla el aislamiento
     composite = (0.45 * recall_val + 0.25 * mrr_val + 0.30 * refusal_acc) * isolation
 
@@ -237,4 +300,5 @@ def aggregate_outcomes(outcomes: list[CaseOutcome]) -> EvalSummary:
         evaluated_with_llm=evaluated_llm,
         answer_correctness=ans_corr,
         citation_validity_rate=cit_val,
+        end_to_end_score=end_to_end,
     )

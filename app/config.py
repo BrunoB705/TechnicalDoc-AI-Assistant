@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     read_only_mode: bool = False
     rate_limit_per_minute: int = 60
 
-    chunk_size: int = 500
-    chunk_overlap: int = 75
+    chunk_size: int = 650
+    chunk_overlap: int = 100
     top_k: int = 4
     min_relevance: float = 0.80  # calibrado empíricamente para intfloat/multilingual-e5-small
 

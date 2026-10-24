@@ -47,8 +47,8 @@ def build_eval_index(
     corpus_dir: Path,
     embeddings: Embeddings,
     work_dir: Path,
-    chunk_size: int = 500,
-    chunk_overlap: int = 75,
+    chunk_size: int = 650,
+    chunk_overlap: int = 100,
 ) -> tuple[Chroma, Settings, KnowledgeBaseService]:
     """Indexa cada subcarpeta de corpus_dir como una Knowledge Base independiente."""
     settings = Settings(
@@ -87,7 +87,7 @@ def evaluate_dataset(
     top_k: int | None = None,
     min_relevance: float | None = None,
 ) -> tuple[EvalSummary, list[CaseOutcome]]:
-    """Ejecuta los casos del dataset midiendo recuperación, abstención y aislamiento."""
+    """Ejecuta los casos del dataset midiendo recuperación, abstención y calidad de generación."""
     k = top_k if top_k is not None else settings.top_k
     threshold = min_relevance if min_relevance is not None else settings.min_relevance
     eval_settings = settings.model_copy(update={"top_k": k, "min_relevance": threshold})
@@ -111,6 +111,12 @@ def evaluate_dataset(
 
         generation_ms = 0.0
         abstained = len(kept) == 0
+        abstention_reason: str | None = "below_threshold" if abstained else None
+        abstention_message: str | None = (
+            "No se encontró evidencia suficientemente relevante en la documentación."
+            if abstained
+            else None
+        )
         generated_answer: str | None = None
         cited_sources: list[str] | None = None
         answer_correct: bool | None = None
@@ -125,6 +131,8 @@ def evaluate_dataset(
                 )
                 generation_ms = (time.perf_counter() - t1) * 1000.0
                 abstained = not res.grounded
+                abstention_reason = res.reason
+                abstention_message = res.message
                 generated_answer = res.answer
                 cited_sources = [s.source for s in res.sources]
             else:
@@ -159,6 +167,8 @@ def evaluate_dataset(
                 cited_sources=cited_sources,
                 answer_correct=answer_correct,
                 citations_valid=citations_valid,
+                abstention_reason=abstention_reason,
+                abstention_message=abstention_message,
             )
         )
 
@@ -194,6 +204,7 @@ def _outcomes_from_cached(
                 generation_ms=0.0,
                 rank=rank,
                 leaked_cross_kb=leaked,
+                abstention_reason="below_threshold" if abstained else None,
             )
         )
     return outcomes
@@ -203,7 +214,7 @@ def calibrate_grid(
     cases: list[EvalCase],
     corpus_dir: Path,
     embeddings: Embeddings,
-    chunk_sizes: tuple[int, ...] = (500, 1000),
+    chunk_sizes: tuple[int, ...] = (500, 650, 1000),
     top_ks: tuple[int, ...] = (3, 4, 6),
     thresholds: tuple[float, ...] = (0.35, 0.75, 0.80, 0.82, 0.837, 0.85),
 ) -> list[CalibrationEntry]:
@@ -263,10 +274,11 @@ def format_markdown_report(
     calibration: list[CalibrationEntry] | None = None,
     config_params: dict | None = None,
     test_summary: EvalSummary | None = None,
+    test_outcomes: list[CaseOutcome] | None = None,
 ) -> str:
     cfg = config_params or {}
     mode_label = (
-        "End-to-End (Recuperación + Generación con LLM)"
+        f"End-to-End con LLM ({cfg.get('llm_model', 'local')})"
         if baseline.evaluated_with_llm
         else "Recuperación Vectorial, Aislamiento y Abstención por Umbral (sin LLM)"
     )
@@ -277,7 +289,7 @@ def format_markdown_report(
         f"- **Modo de evaluación**: `{mode_label}`",
         f"- **Casos conjunto de calibración/desarrollo**: `{baseline.total_cases}` "
         f"(`{baseline.positive_cases}` positivos, `{baseline.abstention_cases}` de abstención)",
-        f"- **Parámetros activos**: `chunk_size={cfg.get('chunk_size', 500)}`, "
+        f"- **Parámetros activos**: `chunk_size={cfg.get('chunk_size', 650)}`, "
         f"`top_k={cfg.get('top_k', 4)}`, `min_relevance={cfg.get('min_relevance', 0.80)}`",
         "",
         "## 2. Métricas de Recuperación y Aislamiento (Conjunto de Desarrollo)",
@@ -301,7 +313,7 @@ def format_markdown_report(
         f"| **Latencia Recuperación (media / p95)** | "
         f"`{baseline.avg_retrieval_ms:.2f} ms` / `{baseline.p95_retrieval_ms:.2f} ms` | "
         "Búsqueda vectorial filtrada en ChromaDB |",
-        f"| **Puntaje Compuesto** | `{baseline.composite_score:.4f}` | "
+        f"| **Puntaje Compuesto Recuperación** | `{baseline.composite_score:.4f}` | "
         "45% Recall@k + 25% MRR + 30% Refusal Accuracy |",
         "",
     ]
@@ -313,7 +325,7 @@ def format_markdown_report(
                 "",
                 "| Métrica de Generación | Valor | Descripción |",
                 "|---|---|---|",
-                f"| **Exactitud de Respuesta (Keyword Overlap)** | "
+                f"| **Exactitud de Respuesta (Stemmed Overlap)** | "
                 f"`{(baseline.answer_correctness or 0.0):.2%}` | "
                 "Cobertura de hechos esperados en respuestas fundamentadas |",
                 f"| **Validez de Citas (`[n]`)** | "
@@ -321,6 +333,8 @@ def format_markdown_report(
                 "Respuestas con citas válidas que apuntan al documento esperado |",
                 f"| **Latencia Media de Generación** | `{baseline.avg_generation_ms:.2f} ms` | "
                 "Tiempo promedio de síntesis y validación en el LLM |",
+                f"| **Índice End-to-End Ponderado** | `{(baseline.end_to_end_score or 0.0):.4f}` | "
+                "30% Recall + 20% MRR + 20% Refusal + 15% Correctness + 15% Citations |",
                 "",
             ]
         )
@@ -350,10 +364,21 @@ def format_markdown_report(
                 f"| **MRR** | `{test_summary.mrr:.4f}` |",
                 f"| **Refusal Accuracy** | `{test_summary.refusal_accuracy:.2%}` |",
                 f"| **Aislamiento entre KBs** | `{test_summary.isolation_rate:.2%}` |",
-                f"| **Puntaje Compuesto** | `{test_summary.composite_score:.4f}` |",
-                "",
+                f"| **Puntaje Compuesto Recuperación** | `{test_summary.composite_score:.4f}` |",
             ]
         )
+        if test_summary.evaluated_with_llm:
+            lines.extend(
+                [
+                    f"| **Exactitud de Respuesta** | "
+                    f"`{(test_summary.answer_correctness or 0.0):.2%}` |",
+                    f"| **Validez de Citas (`[n]`)** | "
+                    f"`{(test_summary.citation_validity_rate or 0.0):.2%}` |",
+                    f"| **Índice End-to-End Ponderado** | "
+                    f"`{(test_summary.end_to_end_score or 0.0):.4f}` |",
+                ]
+            )
+        lines.append("")
 
     if calibration:
         lines.extend(
@@ -374,25 +399,62 @@ def format_markdown_report(
             )
         lines.append("")
 
-    misses = [
+    all_outcomes = list(outcomes) + (list(test_outcomes) if test_outcomes else [])
+    failures = [
         o
-        for o in outcomes
+        for o in all_outcomes
         if (not o.case.should_abstain and (o.abstained or o.rank is None))
         or (o.case.should_abstain and not o.abstained)
+        or (o.answer_correct is False)
+        or (o.citations_valid is False)
+        or o.leaked_cross_kb
     ]
-    lines.append("## 4. Desglose de Casos Destacados / Desvíos")
+    lines.append("## 4. Desglose de Desvíos y Diagnóstico")
     lines.append("")
-    if not misses:
-        lines.append("- Todos los casos evaluados cumplieron el comportamiento esperado.")
+    if not failures:
+        lines.append("- Todos los casos cumplieron estrictamente el comportamiento esperado.")
     else:
-        for o in misses[:10]:
+        for o in failures:
             lines.append(
-                f"- `{o.case.id}` (`{o.case.category}`, KB=`{o.case.knowledge_base_id}`, "
-                f"top_score=`{o.top_score}`): abstained=`{o.abstained}`, "
-                f"retrieved=`{o.retrieved_sources}`"
+                f"- **Caso `{o.case.id}`** (`{o.case.category}`, KB=`{o.case.knowledge_base_id}`, "
+                f"top_score=`{o.top_score}`):\n"
+                f"  - **Pregunta**: {o.case.question}\n"
+                f"  - **Abstenido**: `{o.abstained}` (Motivo: `{o.abstention_reason}`)\n"
+                f"  - **Respuesta esperada**: {o.case.expected_answer or 'N/A'}\n"
+                f"  - **Respuesta generada**: "
+                f"{o.generated_answer or o.abstention_message or 'N/A'}\n"
+                f"  - **Fuentes citadas**: `{o.cited_sources}` "
+                f"(Esperada: `{o.case.expected_source}`)\n"
+                f"  - **Correcto**: `{o.answer_correct}`, **Citas válidas**: `{o.citations_valid}`"
             )
     lines.append("")
     return "\n".join(lines)
+
+
+def _serialize_outcome(o: CaseOutcome) -> dict:
+    return {
+        "id": o.case.id,
+        "knowledge_base_id": o.case.knowledge_base_id,
+        "category": o.case.category,
+        "question": o.case.question,
+        "should_abstain": o.case.should_abstain,
+        "expected_source": o.case.expected_source,
+        "expected_answer": o.case.expected_answer,
+        "retrieved_sources": o.retrieved_sources,
+        "retrieved_kbs": o.retrieved_kbs,
+        "top_score": o.top_score,
+        "abstained": o.abstained,
+        "abstention_reason": o.abstention_reason,
+        "abstention_message": o.abstention_message,
+        "generated_answer": o.generated_answer,
+        "cited_sources": o.cited_sources,
+        "answer_correct": o.answer_correct,
+        "citations_valid": o.citations_valid,
+        "rank": o.rank,
+        "leaked_cross_kb": o.leaked_cross_kb,
+        "retrieval_ms": o.retrieval_ms,
+        "generation_ms": o.generation_ms,
+    }
 
 
 def serialize_report(
@@ -400,8 +462,11 @@ def serialize_report(
     outcomes: list[CaseOutcome],
     calibration: list[CalibrationEntry] | None = None,
     test_summary: EvalSummary | None = None,
+    test_outcomes: list[CaseOutcome] | None = None,
+    config_params: dict | None = None,
 ) -> dict:
     return {
+        "config": config_params or {},
         "summary": asdict(summary),
         "test_summary": asdict(test_summary) if test_summary is not None else None,
         "calibration_top": [
@@ -414,23 +479,6 @@ def serialize_report(
             }
             for c in (calibration or [])[:15]
         ],
-        "cases": [
-            {
-                "id": o.case.id,
-                "knowledge_base_id": o.case.knowledge_base_id,
-                "category": o.case.category,
-                "should_abstain": o.case.should_abstain,
-                "expected_source": o.case.expected_source,
-                "retrieved_sources": o.retrieved_sources,
-                "top_score": o.top_score,
-                "abstained": o.abstained,
-                "rank": o.rank,
-                "leaked_cross_kb": o.leaked_cross_kb,
-                "retrieval_ms": o.retrieval_ms,
-                "generation_ms": o.generation_ms,
-                "answer_correct": o.answer_correct,
-                "citations_valid": o.citations_valid,
-            }
-            for o in outcomes
-        ],
+        "cases": [_serialize_outcome(o) for o in outcomes],
+        "test_cases": [_serialize_outcome(o) for o in (test_outcomes or [])],
     }
