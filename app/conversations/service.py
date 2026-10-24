@@ -264,7 +264,8 @@ class ConversationService:
 
             if row["last_kb_id"] != kb_id:
                 raise InvalidConversationError(
-                    f"La conversación '{conversation_id}' pertenece a la base '{row['last_kb_id']}', no a '{kb_id}'."
+                    f"La conversación '{conversation_id}' pertenece a la base "
+                    f"'{row['last_kb_id']}', no a '{kb_id}'."
                 )
 
             # Insertar mensaje de usuario

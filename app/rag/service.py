@@ -311,7 +311,9 @@ class RAGService:
         knowledge_base_id: str | None = None,
         conversation_id: str | None = None,
     ) -> QueryResult:
-        resolved_kb, history = self._validate_and_resolve_conv_kb(conversation_id, knowledge_base_id)
+        resolved_kb, history = self._validate_and_resolve_conv_kb(
+            conversation_id, knowledge_base_id
+        )
         kb_id, kb_name, is_empty_kb = self._resolve_kb(resolved_kb)
         if is_empty_kb:
             msg = f"La base '{kb_name}' no contiene documentos cargados."
@@ -406,7 +408,9 @@ class RAGService:
         message/answer/sources/cited_ids/conversation_id). `error` queda reservado a fallos
         reales (LLM caído).
         """
-        resolved_kb, history = self._validate_and_resolve_conv_kb(conversation_id, knowledge_base_id)
+        resolved_kb, history = self._validate_and_resolve_conv_kb(
+            conversation_id, knowledge_base_id
+        )
         kb_id, kb_name, is_empty_kb = self._resolve_kb(resolved_kb)
         if is_empty_kb:
             msg = f"La base '{kb_name}' no contiene documentos cargados."
