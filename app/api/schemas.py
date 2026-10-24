@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class QueryRequest(BaseModel):
@@ -66,3 +66,52 @@ class KnowledgeBaseResponse(BaseModel):
 class KnowledgeBaseListResponse(BaseModel):
     total: int
     knowledge_bases: list[KnowledgeBaseResponse]
+
+
+class CreateConversationRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=120)
+    knowledge_base_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class UpdateConversationRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: str) -> str:
+        clean = v.strip()
+        if not clean:
+            raise ValueError("El título de la conversación no puede estar vacío.")
+        return clean
+
+
+class MessageResponse(BaseModel):
+    id: int
+    conversation_id: str
+    role: str
+    content: str
+    grounded: bool = True
+    reason: str | None = None
+    message: str | None = None
+    sources: list[Source] = []
+    retrieved: list[Source] = []
+    knowledge_base_id: str = "general"
+    created_at: str
+
+
+class ConversationSummaryResponse(BaseModel):
+    id: str
+    title: str
+    last_kb_id: str = "general"
+    created_at: str
+    updated_at: str
+    message_count: int = 0
+
+
+class ConversationListResponse(BaseModel):
+    total: int
+    conversations: list[ConversationSummaryResponse]
+
+
+class ConversationDetailResponse(ConversationSummaryResponse):
+    messages: list[MessageResponse] = []

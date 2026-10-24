@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import documents, health, knowledge_bases, query, ui
+from app.api.routes import conversations, documents, health, knowledge_bases, query, ui
 from app.exceptions import (
     ConversationNotFoundError,
     DocumentNotFoundError,
@@ -29,6 +29,7 @@ def create_app() -> FastAPI:
     app.include_router(query.router)
     app.include_router(knowledge_bases.router)
     app.include_router(documents.router)
+    app.include_router(conversations.router)
     app.include_router(ui.router)
     app.mount("/static", StaticFiles(directory=ui.STATIC_DIR), name="static")
 
