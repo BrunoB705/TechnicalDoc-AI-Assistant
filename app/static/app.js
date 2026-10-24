@@ -316,6 +316,7 @@ $("kb-form")?.addEventListener("submit", async (ev) => {
   $("kb-modal").close();
   await loadKbs(created.id);
   await loadDocs();
+  startNewChat();
   setStatus(`Base '${created.name}' creada.`, "ok");
 });
 
@@ -331,6 +332,7 @@ $("del-kb-btn")?.addEventListener("click", async () => {
     setStatus(`Base "${label}" eliminada.`, "ok");
     await loadKbs("general");
     await loadDocs();
+    startNewChat();
   } else {
     setStatus(await errorText(r), "err");
   }
@@ -431,6 +433,10 @@ async function selectConversation(convId) {
     const r = await fetch(`/conversations/${encodeURIComponent(convId)}`);
     if (!r.ok) return;
     const detail = await r.json();
+    if (detail.last_kb_id && !kbCatalog.some((k) => k.id === detail.last_kb_id)) {
+      setStatus(`La base '${detail.last_kb_id}' de esta conversación ya no existe.`, "warn");
+      return;
+    }
     activeConversationId = detail.id;
     renderConversationsList();
 
@@ -753,7 +759,17 @@ async function loadDocs() {
       const info = el("div");
       info.appendChild(el("div", "doc-name", d.source));
       const pages = d.pages ? ` · ${d.pages} pág.` : "";
-      info.appendChild(el("div", "doc-meta", `${d.file_type} · ${d.chunks} chunks${pages}`));
+      let dateMeta = "";
+      if (d.created_at) {
+        try {
+          const dt = new Date(d.created_at);
+          if (!isNaN(dt.getTime())) {
+            const pad = (n) => String(n).padStart(2, "0");
+            dateMeta = ` · ${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+          }
+        } catch { /* ignorar */ }
+      }
+      info.appendChild(el("div", "doc-meta", `${d.file_type} · ${d.chunks} chunks${pages}${dateMeta}`));
       const del = el("button", "danger", "Borrar");
       del.type = "button";
       del.disabled = readOnlyMode || isRetraining;

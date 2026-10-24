@@ -77,3 +77,10 @@ def test_app_js_resets_conversation_on_kb_change(client):
     js = r.text
     assert "startNewChat()" in js
     assert "previousKbId !== activeKbId" in js
+
+
+def test_app_js_resets_conversation_on_kb_creation_and_deletion_and_guards_orphan_kb(client):
+    r = client.get("/static/app.js")
+    assert r.status_code == 200
+    js = r.text
+    assert "ya no existe" in js
