@@ -200,11 +200,6 @@ El repositorio incluye un framework reproducible de evaluación ([`scripts/evalu
 | **Aislamiento entre KBs** | **100.00%** (45/45) | **100.00%** (15/15) | Cero fugas de fragmentos (`0` chunks contaminados) entre bases de conocimiento distintas. |
 | **Latencia de Recuperación** | **26.73 ms** (p95: **36.70 ms**) | **25.40 ms** | Búsqueda vectorial local + filtrado obligatorio por `knowledge_base_id` en ChromaDB. |
 
-> **Nota sobre calibración de `multilingual-e5-small` y política de abstención:**
-> Debido a la anisotropía del espacio coseno en modelos de la familia E5, las similitudes nunca caen cerca de `0.0`: las consultas fuera de dominio puntúan `0.71–0.79`, las consultas técnicas cruzadas hacia otra KB puntúan `0.81–0.835` y las consultas con evidencia real puntúan `0.839–0.94`.
-> - **Modo solo umbral vectorial (sin LLM):** `min_relevance=0.837` separa por sí solo el 100% de las consultas *cross-KB* tanto en el conjunto de desarrollo como en el *held-out test set*.
-> - **Modo aplicación (con LLM activo):** `MIN_RELEVANCE=0.80` (valor por defecto en `app/config.py` y `.env.example`) ofrece mayor margen de sensibilidad para consultas parafraseadas de usuario y delega el rechazo fino de casos borde (`0.80–0.837`) a la regla de abstención `NO_EVIDENCE` del LLM.
-
 Para reproducir la evaluación (genera `eval/reports/calibration_report.md`, `eval/reports/latest_report.md` y `eval/reports/latest.json`):
 ```powershell
 # Evaluación determinista de recuperación y aislamiento (Dev + Held-Out Test Set)

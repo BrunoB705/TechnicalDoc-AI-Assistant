@@ -1,3 +1,7 @@
+import os
+
+os.environ["ENABLE_STEP_BACK"] = "false"
+
 from pathlib import Path
 
 import pytest

@@ -21,6 +21,7 @@ from app.rag.prompts import (
     CONVERSATIONAL_PROMPT,
     NO_EVIDENCE,
     PROMPT,
+    STEP_BACK_PROMPT,
     format_history,
 )
 
@@ -129,6 +130,24 @@ class RAGService:
             logger.warning(json.dumps({"event": "llm_error", "error": type(exc).__name__}))
             raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
         return str(msg.content).strip() or question
+
+    def _step_back_question(self, question: str) -> str:
+        try:
+            msg = (STEP_BACK_PROMPT | self.llm).invoke({"question": question})
+            text = str(msg.content).strip()
+            return text or question
+        except _LLM_CONNECTION_ERRORS as exc:
+            logger.warning(json.dumps({"event": "step_back_error", "error": type(exc).__name__}))
+            return question
+
+    async def _astep_back_question(self, question: str) -> str:
+        try:
+            msg = await (STEP_BACK_PROMPT | self.llm).ainvoke({"question": question})
+            text = str(msg.content).strip()
+            return text or question
+        except _LLM_CONNECTION_ERRORS as exc:
+            logger.warning(json.dumps({"event": "step_back_error", "error": type(exc).__name__}))
+            return question
 
     def _generate(
         self,
@@ -240,7 +259,11 @@ class RAGService:
         return kb_id, kb_id, False
 
     def _retrieve(
-        self, question: str, top_k: int | None = None, kb_id: str = "general"
+        self,
+        question: str,
+        top_k: int | None = None,
+        kb_id: str = "general",
+        step_back_query: str | None = None,
     ) -> tuple[list[tuple[Document, float]], list[SourceHit], int]:
         if self.vs._collection.count() == 0:
             raise EmptyIndexError("No hay documentos indexados. Ejecutá la ingesta primero.")
@@ -250,6 +273,22 @@ class RAGService:
         found = self.vs.similarity_search_with_relevance_scores(
             question, k=k, filter={"knowledge_base_id": kb_id}
         )
+
+        if (
+            step_back_query
+            and step_back_query.strip()
+            and step_back_query.strip().lower() != question.strip().lower()
+        ):
+            sb_found = self.vs.similarity_search_with_relevance_scores(
+                step_back_query, k=k, filter={"knowledge_base_id": kb_id}
+            )
+            by_id: dict[str, tuple[Document, float]] = {}
+            for doc, score in found + sb_found:
+                doc_key = doc.metadata.get("chunk_id") or doc.page_content
+                if doc_key not in by_id or score > by_id[doc_key][1]:
+                    by_id[doc_key] = (doc, score)
+            found = sorted(by_id.values(), key=lambda x: x[1], reverse=True)[:k]
+
         retrieval_ms = int((time.perf_counter() - t0) * 1000)
 
         hits = [(d, s) for d, s in found if s >= self.settings.min_relevance]
@@ -400,7 +439,13 @@ class RAGService:
             return result
 
         search_query = self._condense_question(history, question)
-        hits, retrieved, retrieval_ms = self._retrieve(search_query, top_k, kb_id=kb_id)
+        step_back_query = None
+        if self.settings.enable_step_back:
+            step_back_query = self._step_back_question(search_query)
+
+        hits, retrieved, retrieval_ms = self._retrieve(
+            search_query, top_k, kb_id=kb_id, step_back_query=step_back_query
+        )
         if not hits:
             msg = (
                 f"No se encontró evidencia suficiente en la base '{kb_name}'."
@@ -506,7 +551,13 @@ class RAGService:
             yield {"event": "error", "data": {"error": "llm_unavailable", "detail": str(exc)}}
             return
 
-        hits, retrieved, retrieval_ms = self._retrieve(search_query, top_k, kb_id=kb_id)
+        step_back_query = None
+        if self.settings.enable_step_back:
+            step_back_query = await self._astep_back_question(search_query)
+
+        hits, retrieved, retrieval_ms = self._retrieve(
+            search_query, top_k, kb_id=kb_id, step_back_query=step_back_query
+        )
         if not hits:
             msg = (
                 f"No se encontró evidencia suficiente en la base '{kb_name}'."
