@@ -110,7 +110,7 @@ OPENAI_MODEL=tu-modelo-local
 EMBEDDING_MODEL=intfloat/multilingual-e5-small
 CHROMA_DIR=data/chroma
 TOP_K=4
-MIN_RELEVANCE=0.35
+MIN_RELEVANCE=0.80
 READ_ONLY_MODE=false
 ```
 
