@@ -17,6 +17,8 @@ let isRetraining = false;
 let currentConversationMessages = [];
 let latestAnswer = "";
 let latestQuestion = "";
+let selectedPedagogicalMode = "auto";
+let isStrictMode = false;
 
 // Configuración de Markdown (Marked) y fórmulas (KaTeX)
 if (typeof marked !== "undefined") {
@@ -424,7 +426,14 @@ function renderHistoricalBotMessage(m) {
     extra.appendChild(det);
   }
   const kbId = m.knowledge_base_id || "general";
-  extra.appendChild(el("div", "meta", `KB: ${kbId}`));
+  let metaInfo = `KB: ${kbId}`;
+  if (m.pedagogical_mode && m.pedagogical_mode !== "auto") {
+    metaInfo += ` · Modo: ${m.pedagogical_mode}`;
+  }
+  if (m.strict_mode) {
+    metaInfo += ` · 🔒 Estricto`;
+  }
+  extra.appendChild(el("div", "meta", metaInfo));
   messagesEl.appendChild(bubble);
 }
 
@@ -588,7 +597,12 @@ async function ask(question, topK) {
       }
     }
 
-    const body = { question, knowledge_base_id: kbSnapshot };
+    const body = {
+      question,
+      knowledge_base_id: kbSnapshot,
+      pedagogical_mode: selectedPedagogicalMode,
+      strict_mode: isStrictMode,
+    };
     if (topK) body.top_k = topK;
     if (activeConversationId) body.conversation_id = activeConversationId;
     const resp = await fetch("/query/stream", {
@@ -652,7 +666,17 @@ async function ask(question, topK) {
           extra.appendChild(det);
         }
         const secs = ((performance.now() - started) / 1000).toFixed(1);
-        extra.appendChild(el("div", "meta", `${secs} s · KB: ${kbSnapshot}`));
+        let metaText = `${secs} s · KB: ${kbSnapshot}`;
+        if (data.pedagogical_mode && data.pedagogical_mode !== "auto") {
+          metaText += ` · Modo: ${data.pedagogical_mode}`;
+        }
+        if (data.strict_mode) {
+          metaText += ` · 🔒 Estricto`;
+        }
+        extra.appendChild(el("div", "meta", metaText));
+        if (data.verification_data && Object.keys(data.verification_data).length > 0) {
+          extra.appendChild(el("div", "verification-badge", "✓ Cálculo verificado"));
+        }
       } else if (event === "error") {
         bubble.classList.add(data.reason ? "warn" : "error");
         const errMsg = data.message || data.detail || "Error al procesar la consulta.";
@@ -929,3 +953,16 @@ setInterval(checkHealth, 15000);
 loadKbs("general").then(() => loadDocs());
 loadConversations();
 questionEl.focus();
+
+// Controles del Modo Pedagógico y Modo Estricto
+document.querySelectorAll(".mode-chip").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".mode-chip").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    selectedPedagogicalMode = btn.dataset.mode || "auto";
+  });
+});
+
+$("strict-mode-toggle")?.addEventListener("change", (e) => {
+  isStrictMode = Boolean(e.target.checked);
+});

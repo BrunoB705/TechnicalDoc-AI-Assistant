@@ -327,6 +327,8 @@ class RAGService:
                 sources=[s.__dict__ for s in result.sources],
                 retrieved=[s.__dict__ for s in result.retrieved],
                 kb_id=kb_id,
+                pedagogical_mode=result.pedagogical_mode,
+                strict_mode=result.strict_mode,
             )
 
     def _resolve_kb(self, knowledge_base_id: str | None) -> tuple[str, str, bool]:

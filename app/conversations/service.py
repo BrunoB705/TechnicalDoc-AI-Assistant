@@ -59,6 +59,8 @@ class ConversationService:
                     sources_json TEXT NOT NULL DEFAULT '[]',
                     retrieved_json TEXT NOT NULL DEFAULT '[]',
                     knowledge_base_id TEXT NOT NULL DEFAULT 'general',
+                    pedagogical_mode TEXT DEFAULT NULL,
+                    strict_mode INTEGER DEFAULT NULL,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
@@ -67,6 +69,11 @@ class ConversationService:
                     ON messages(conversation_id, id ASC);
                 """
             )
+            columns = [r["name"] for r in conn.execute("PRAGMA table_info(messages)").fetchall()]
+            if "pedagogical_mode" not in columns:
+                conn.execute("ALTER TABLE messages ADD COLUMN pedagogical_mode TEXT DEFAULT NULL")
+            if "strict_mode" not in columns:
+                conn.execute("ALTER TABLE messages ADD COLUMN strict_mode INTEGER DEFAULT NULL")
             conn.commit()
 
     def _check_writable(self) -> None:
@@ -146,7 +153,8 @@ class ConversationService:
             msg_rows = conn.execute(
                 """
                 SELECT id, conversation_id, role, content, grounded, reason, message,
-                       sources_json, retrieved_json, knowledge_base_id, created_at
+                       sources_json, retrieved_json, knowledge_base_id,
+                       pedagogical_mode, strict_mode, created_at
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY id ASC
@@ -166,6 +174,8 @@ class ConversationService:
                 sources=json.loads(m["sources_json"]) if m["sources_json"] else [],
                 retrieved=json.loads(m["retrieved_json"]) if m["retrieved_json"] else [],
                 knowledge_base_id=m["knowledge_base_id"],
+                pedagogical_mode=m["pedagogical_mode"],
+                strict_mode=bool(m["strict_mode"]) if m["strict_mode"] is not None else None,
                 created_at=m["created_at"],
             )
             for m in msg_rows
@@ -240,6 +250,8 @@ class ConversationService:
         sources: list[dict] | None = None,
         retrieved: list[dict] | None = None,
         kb_id: str = "general",
+        pedagogical_mode: str | None = None,
+        strict_mode: bool | None = None,
     ) -> None:
         if self._settings.read_only_mode:
             return
@@ -265,10 +277,18 @@ class ConversationService:
                 """
                 INSERT INTO messages (
                     conversation_id, role, content, grounded, reason, message,
-                    sources_json, retrieved_json, knowledge_base_id, created_at
-                ) VALUES (?, 'user', ?, 1, NULL, NULL, '[]', '[]', ?, ?)
+                    sources_json, retrieved_json, knowledge_base_id,
+                    pedagogical_mode, strict_mode, created_at
+                ) VALUES (?, 'user', ?, 1, NULL, NULL, '[]', '[]', ?, ?, ?, ?)
                 """,
-                (conversation_id, question, kb_id, now),
+                (
+                    conversation_id,
+                    question,
+                    kb_id,
+                    pedagogical_mode,
+                    1 if strict_mode is True else (0 if strict_mode is False else None),
+                    now,
+                ),
             )
 
             # Insertar mensaje del asistente
@@ -279,8 +299,9 @@ class ConversationService:
                 """
                 INSERT INTO messages (
                     conversation_id, role, content, grounded, reason, message,
-                    sources_json, retrieved_json, knowledge_base_id, created_at
-                ) VALUES (?, 'assistant', ?, ?, ?, ?, ?, ?, ?, ?)
+                    sources_json, retrieved_json, knowledge_base_id,
+                    pedagogical_mode, strict_mode, created_at
+                ) VALUES (?, 'assistant', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
@@ -291,6 +312,8 @@ class ConversationService:
                     json.dumps(sources or [], ensure_ascii=False),
                     json.dumps(retrieved or [], ensure_ascii=False),
                     kb_id,
+                    pedagogical_mode,
+                    1 if strict_mode is True else (0 if strict_mode is False else None),
                     now,
                 ),
             )

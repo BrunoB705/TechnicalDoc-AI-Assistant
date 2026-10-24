@@ -73,6 +73,8 @@ def query(req: QueryRequest, service: RAGService = Depends(get_rag_service)) -> 
         req.top_k,
         knowledge_base_id=req.knowledge_base_id,
         conversation_id=req.conversation_id,
+        pedagogical_mode=req.pedagogical_mode,
+        strict_mode=req.strict_mode,
     )
     msg = None if result.grounded else (result.message or MESSAGES.get(result.reason or ""))
     return QueryResponse(
@@ -85,6 +87,9 @@ def query(req: QueryRequest, service: RAGService = Depends(get_rag_service)) -> 
         reason=result.reason,
         knowledge_base_id=result.knowledge_base_id,
         conversation_id=result.conversation_id,
+        pedagogical_mode=result.pedagogical_mode,
+        strict_mode=result.strict_mode,
+        verification_data=result.verification_data,
     )
 
 
@@ -117,6 +122,8 @@ async def query_stream(
             req.top_k,
             knowledge_base_id=req.knowledge_base_id,
             conversation_id=req.conversation_id,
+            pedagogical_mode=req.pedagogical_mode,
+            strict_mode=req.strict_mode,
         ):
             if await request.is_disconnected():
                 break

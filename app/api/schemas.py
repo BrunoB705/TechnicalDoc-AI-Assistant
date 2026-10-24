@@ -1,3 +1,5 @@
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -6,6 +8,14 @@ class QueryRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=10)
     knowledge_base_id: str | None = Field(default=None, min_length=1, max_length=64)
     conversation_id: str | None = Field(default=None, min_length=1, max_length=64)
+    pedagogical_mode: Literal["auto", "explain", "solve", "hint", "check"] | None = Field(
+        default=None,
+        description="Modo pedagógico del profesor: auto, explain, solve, hint, check",
+    )
+    strict_mode: bool | None = Field(
+        default=None,
+        description="Modo estricto: requiere premisas explícitas en la base de conocimiento",
+    )
 
 
 class Source(BaseModel):
@@ -28,6 +38,9 @@ class QueryResponse(BaseModel):
     reason: str | None = None
     knowledge_base_id: str = "general"
     conversation_id: str | None = None
+    pedagogical_mode: str | None = None
+    strict_mode: bool | None = None
+    verification_data: dict[str, Any] | None = None
 
 
 class ErrorResponse(BaseModel):
@@ -99,6 +112,8 @@ class MessageResponse(BaseModel):
     sources: list[Source] = []
     retrieved: list[Source] = []
     knowledge_base_id: str = "general"
+    pedagogical_mode: str | None = None
+    strict_mode: bool | None = None
     created_at: str
 
 

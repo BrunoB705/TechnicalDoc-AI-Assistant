@@ -13,6 +13,8 @@ class MessageRecord:
     sources: list[dict] = field(default_factory=list)
     retrieved: list[dict] = field(default_factory=list)
     knowledge_base_id: str = "general"
+    pedagogical_mode: str | None = None
+    strict_mode: bool | None = None
     created_at: str = ""
 
 
