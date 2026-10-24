@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
@@ -5,6 +7,7 @@ from app.config import Settings, get_settings
 from app.dependencies import get_knowledge_base_service
 from app.knowledge_bases.service import KnowledgeBaseService
 
+logger = logging.getLogger("rag")
 router = APIRouter(tags=["health"])
 
 
@@ -40,7 +43,11 @@ def health_ready(
             },
         )
     except Exception as exc:
+        logger.error("Readiness check failed: %s", type(exc).__name__)
         return JSONResponse(
             status_code=503,
-            content={"status": "not_ready", "detail": str(exc)},
+            content={
+                "status": "not_ready",
+                "detail": "El almacén de datos no está disponible temporalmente.",
+            },
         )

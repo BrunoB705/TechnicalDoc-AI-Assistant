@@ -40,3 +40,7 @@ class InvalidKnowledgeBaseError(RAGError):
 
 class ReadOnlyModeError(RAGError):
     """Operación de escritura bloqueada porque READ_ONLY_MODE está activo."""
+
+
+class RateLimitExceededError(RAGError):
+    """Se superó el límite de consultas por minuto permitido."""

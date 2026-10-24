@@ -1,7 +1,49 @@
+import re
 from dataclasses import dataclass
 from typing import Literal
 
 Category = Literal["positive", "negative", "cross_kb"]
+
+_STOPWORDS = {
+    "el",
+    "la",
+    "los",
+    "las",
+    "un",
+    "una",
+    "unos",
+    "unas",
+    "de",
+    "del",
+    "al",
+    "a",
+    "en",
+    "con",
+    "por",
+    "para",
+    "sin",
+    "sobre",
+    "entre",
+    "hacia",
+    "hasta",
+    "como",
+    "que",
+    "se",
+    "su",
+    "sus",
+    "es",
+    "son",
+    "o",
+    "u",
+    "y",
+    "e",
+    "ni",
+    "no",
+    "si",
+    "cada",
+    "cuando",
+    "donde",
+}
 
 
 @dataclass
@@ -26,6 +68,10 @@ class CaseOutcome:
     generation_ms: float = 0.0
     rank: int | None = None  # posición 1-based del primer chunk del documento esperado
     leaked_cross_kb: bool = False
+    generated_answer: str | None = None
+    cited_sources: list[str] | None = None
+    answer_correct: bool | None = None
+    citations_valid: bool | None = None
 
 
 @dataclass
@@ -44,6 +90,9 @@ class EvalSummary:
     p95_retrieval_ms: float
     avg_generation_ms: float
     composite_score: float
+    evaluated_with_llm: bool = False
+    answer_correctness: float | None = None
+    citation_validity_rate: float | None = None
 
 
 def compute_rank(retrieved_sources: list[str], expected_source: str | None) -> int | None:
@@ -70,6 +119,37 @@ def reciprocal_rank(retrieved_sources: list[str], expected_source: str | None) -
     return (1.0 / r) if r is not None else 0.0
 
 
+def _tokenize_keywords(text: str) -> set[str]:
+    words = re.findall(r"[a-zA-Z0-9áéíóúñÁÉÍÓÚÑ_.-]+", text.lower())
+    return {w for w in words if len(w) >= 2 and w not in _STOPWORDS}
+
+
+def check_answer_correctness(generated: str | None, expected: str | None) -> bool:
+    """Comprueba de forma determinista que la respuesta generada cubra términos clave esperados."""
+    if not expected:
+        return generated is None
+    if not generated:
+        return False
+    expected_tokens = _tokenize_keywords(expected)
+    if not expected_tokens:
+        return True
+    gen_tokens = _tokenize_keywords(generated)
+    overlap = len(expected_tokens & gen_tokens) / len(expected_tokens)
+    return overlap >= 0.35
+
+
+def check_citation_validity(
+    cited_sources: list[str],
+    expected_source: str | None,
+) -> bool:
+    """Comprueba que existan citas válidas y que al menos una apunte al documento esperado."""
+    if not cited_sources:
+        return False
+    if not expected_source:
+        return True
+    return compute_rank(cited_sources, expected_source) is not None
+
+
 def _percentile(values: list[float], pct: float) -> float:
     if not values:
         return 0.0
@@ -87,12 +167,7 @@ def aggregate_outcomes(outcomes: list[CaseOutcome]) -> EvalSummary:
     negatives = [o for o in outcomes if o.case.category == "negative"]
     cross_kbs = [o for o in outcomes if o.case.category == "cross_kb"]
 
-    # Recall@k y MRR sobre preguntas positivas (solo cuentan como acierto si no se abstuvo)
-    hits = [
-        1.0
-        for o in positives
-        if not o.abstained and o.rank is not None
-    ]
+    hits = [1.0 for o in positives if not o.abstained and o.rank is not None]
     rr_values = [
         (1.0 / o.rank) if (not o.abstained and o.rank is not None) else 0.0
         for o in positives
@@ -127,6 +202,19 @@ def aggregate_outcomes(outcomes: list[CaseOutcome]) -> EvalSummary:
     p95_ret = _percentile(ret_times, 95.0)
     avg_gen = sum(gen_times) / len(gen_times)
 
+    evaluated_llm = any(
+        o.answer_correct is not None or o.citations_valid is not None for o in outcomes
+    )
+    ans_corr: float | None = None
+    cit_val: float | None = None
+    if evaluated_llm and positives:
+        ans_corr = round(
+            sum(1.0 for o in positives if o.answer_correct) / len(positives), 4
+        )
+        cit_val = round(
+            sum(1.0 for o in positives if o.citations_valid) / len(positives), 4
+        )
+
     # Puntaje compuesto ponderado para calibración:
     # 45% Recall@k + 25% MRR + 30% Refusal Accuracy, penalizado si falla el aislamiento
     composite = (0.45 * recall_val + 0.25 * mrr_val + 0.30 * refusal_acc) * isolation
@@ -146,4 +234,7 @@ def aggregate_outcomes(outcomes: list[CaseOutcome]) -> EvalSummary:
         p95_retrieval_ms=round(p95_ret, 2),
         avg_generation_ms=round(avg_gen, 2),
         composite_score=round(composite, 4),
+        evaluated_with_llm=evaluated_llm,
+        answer_correctness=ans_corr,
+        citation_validity_rate=cit_val,
     )

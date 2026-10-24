@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
+from app.api.routes.query import reset_rate_limiter
 from app.config import get_settings
 from app.dependencies import (
     get_document_service,
@@ -12,6 +13,8 @@ from app.documents.service import DocumentService
 from app.knowledge_bases.service import KnowledgeBaseService
 from app.main import create_app
 from app.rag.service import RAGService
+from tests.integration.test_api import use_llm
+from tests.integration.test_robustness import parse_sse
 
 
 @pytest.fixture
@@ -19,6 +22,7 @@ def readonly_client(vectorstore, settings, tmp_path):
     from app.ingestion.pipeline import ingest_directory
     from tests.conftest import FIXTURES
 
+    reset_rate_limiter()
     s = settings.model_copy(
         update={
             "docs_dir": tmp_path / "ro_docs",
@@ -102,3 +106,46 @@ def test_read_only_mode_allows_reads_and_queries(readonly_client):
     )
     assert q.status_code == 200
     assert q.json()["grounded"] is True
+
+
+def test_rate_limiter_blocks_excess_queries_with_429(client, vectorstore, settings):
+    reset_rate_limiter()
+    use_llm(
+        client,
+        vectorstore,
+        settings,
+        FakeListChatModel(responses=["Respuesta [1]."]),
+        rate_limit_per_minute=2,
+    )
+    assert client.post("/query", json={"question": "consulta 1"}).status_code == 200
+    assert client.post("/query", json={"question": "consulta 2"}).status_code == 200
+    r_blocked = client.post("/query", json={"question": "consulta 3"})
+    assert r_blocked.status_code == 429
+    assert r_blocked.json()["error"] == "rate_limit_exceeded"
+    reset_rate_limiter()
+
+
+def test_stream_applies_same_citation_retry_policy_as_sync_query(
+    client, vectorstore, settings
+):
+    reset_rate_limiter()
+    llm = FakeListChatModel(responses=["Respuesta inicial sin citas.", "Respuesta corregida [2]."])
+    use_llm(client, vectorstore, settings, llm)
+    r = client.post("/query/stream", json={"question": "pregunta de prueba"})
+    assert r.status_code == 200
+    end = parse_sse(r.text)[-1][1]
+    assert end["grounded"] is True
+    assert end["cited_ids"] == [2]
+    assert [s["id"] for s in end["sources"]] == [2]
+
+
+def test_llm_error_does_not_leak_internal_details(client, vectorstore, settings):
+    class LeakyLLM(FakeListChatModel):
+        def _call(self, *a, **k):
+            raise ConnectionError("secret_internal_url=http://10.0.0.42:1234/v1 key=sk-secret")
+
+    use_llm(client, vectorstore, settings, LeakyLLM(responses=["x"]))
+    r = client.post("/query", json={"question": "pregunta de prueba"})
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    assert "10.0.0.42" not in detail and "sk-secret" not in detail

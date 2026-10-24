@@ -19,6 +19,16 @@ def main() -> None:
         default="general",
         help="ID de la base de conocimiento destino (por defecto: general)",
     )
+    parser.add_argument(
+        "--kb-name",
+        default=None,
+        help="Nombre visible al registrar una nueva Knowledge Base (por defecto: valor de --kb)",
+    )
+    parser.add_argument(
+        "--kb-description",
+        default="",
+        help="Descripción opcional para la Knowledge Base",
+    )
     parser.add_argument("--reset", action="store_true", help="Borra la colección antes de indexar")
     args = parser.parse_args()
 
@@ -32,7 +42,11 @@ def main() -> None:
     try:
         kb_svc.get_knowledge_base(args.kb)
     except Exception:
-        kb_svc.create_knowledge_base(name=args.kb, kb_id=args.kb)
+        kb_svc.create_knowledge_base(
+            name=args.kb_name or args.kb,
+            description=args.kb_description,
+            kb_id=args.kb,
+        )
 
     n_docs, n_chunks = ingest_directory(
         args.directory, vs, settings, knowledge_base_id=args.kb

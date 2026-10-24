@@ -14,6 +14,8 @@ from app.evaluation.metrics import (
     EvalCase,
     EvalSummary,
     aggregate_outcomes,
+    check_answer_correctness,
+    check_citation_validity,
     compute_rank,
 )
 from app.ingestion.pipeline import ingest_directory
@@ -45,8 +47,8 @@ def build_eval_index(
     corpus_dir: Path,
     embeddings: Embeddings,
     work_dir: Path,
-    chunk_size: int = 1000,
-    chunk_overlap: int = 150,
+    chunk_size: int = 500,
+    chunk_overlap: int = 75,
 ) -> tuple[Chroma, Settings, KnowledgeBaseService]:
     """Indexa cada subcarpeta de corpus_dir como una Knowledge Base independiente."""
     settings = Settings(
@@ -85,7 +87,7 @@ def evaluate_dataset(
     top_k: int | None = None,
     min_relevance: float | None = None,
 ) -> tuple[EvalSummary, list[CaseOutcome]]:
-    """Ejecuta todos los casos del dataset midiendo recuperación, abstención y aislamiento."""
+    """Ejecuta los casos del dataset midiendo recuperación, abstención y aislamiento."""
     k = top_k if top_k is not None else settings.top_k
     threshold = min_relevance if min_relevance is not None else settings.min_relevance
     eval_settings = settings.model_copy(update={"top_k": k, "min_relevance": threshold})
@@ -109,15 +111,35 @@ def evaluate_dataset(
 
         generation_ms = 0.0
         abstained = len(kept) == 0
+        generated_answer: str | None = None
+        cited_sources: list[str] | None = None
+        answer_correct: bool | None = None
+        citations_valid: bool | None = None
 
-        if llm is not None and not abstained:
-            rag = RAGService(vectorstore, llm, eval_settings, kb_service=kb_service)
-            t1 = time.perf_counter()
-            res = rag.answer(
-                case.question, top_k=k, knowledge_base_id=case.knowledge_base_id
-            )
-            generation_ms = (time.perf_counter() - t1) * 1000.0
-            abstained = not res.grounded
+        if llm is not None:
+            if not abstained:
+                rag = RAGService(vectorstore, llm, eval_settings, kb_service=kb_service)
+                t1 = time.perf_counter()
+                res = rag.answer(
+                    case.question, top_k=k, knowledge_base_id=case.knowledge_base_id
+                )
+                generation_ms = (time.perf_counter() - t1) * 1000.0
+                abstained = not res.grounded
+                generated_answer = res.answer
+                cited_sources = [s.source for s in res.sources]
+            else:
+                cited_sources = []
+
+            if not case.should_abstain:
+                answer_correct = (not abstained) and check_answer_correctness(
+                    generated_answer, case.expected_answer
+                )
+                citations_valid = (not abstained) and check_citation_validity(
+                    cited_sources or [], case.expected_source
+                )
+            else:
+                answer_correct = abstained
+                citations_valid = abstained
 
         leaked = any(kb != case.knowledge_base_id for kb in retrieved_kbs)
         rank = compute_rank(retrieved_sources, case.expected_source)
@@ -133,6 +155,10 @@ def evaluate_dataset(
                 generation_ms=round(generation_ms, 2),
                 rank=rank,
                 leaked_cross_kb=leaked,
+                generated_answer=generated_answer,
+                cited_sources=cited_sources,
+                answer_correct=answer_correct,
+                citations_valid=citations_valid,
             )
         )
 
@@ -236,18 +262,25 @@ def format_markdown_report(
     outcomes: list[CaseOutcome],
     calibration: list[CalibrationEntry] | None = None,
     config_params: dict | None = None,
+    test_summary: EvalSummary | None = None,
 ) -> str:
     cfg = config_params or {}
+    mode_label = (
+        "End-to-End (Recuperación + Generación con LLM)"
+        if baseline.evaluated_with_llm
+        else "Recuperación Vectorial, Aislamiento y Abstención por Umbral (sin LLM)"
+    )
     lines = [
         "# Informe de Evaluación Cuantitativa y Calibración RAG",
         "",
         "## 1. Configuración Evaluada",
-        f"- **Casos totales**: `{baseline.total_cases}` "
+        f"- **Modo de evaluación**: `{mode_label}`",
+        f"- **Casos conjunto de calibración/desarrollo**: `{baseline.total_cases}` "
         f"(`{baseline.positive_cases}` positivos, `{baseline.abstention_cases}` de abstención)",
-        f"- **Parámetros activos**: `chunk_size={cfg.get('chunk_size', 1000)}`, "
-        f"`top_k={cfg.get('top_k', 4)}`, `min_relevance={cfg.get('min_relevance', 0.35)}`",
+        f"- **Parámetros activos**: `chunk_size={cfg.get('chunk_size', 500)}`, "
+        f"`top_k={cfg.get('top_k', 4)}`, `min_relevance={cfg.get('min_relevance', 0.80)}`",
         "",
-        "## 2. Métricas Principales",
+        "## 2. Métricas de Recuperación y Aislamiento (Conjunto de Desarrollo)",
         "",
         "| Métrica | Valor | Descripción |",
         "|---|---|---|",
@@ -272,6 +305,55 @@ def format_markdown_report(
         "45% Recall@k + 25% MRR + 30% Refusal Accuracy |",
         "",
     ]
+
+    if baseline.evaluated_with_llm:
+        lines.extend(
+            [
+                "## 2.1 Métricas de Generación y Citas (con LLM)",
+                "",
+                "| Métrica de Generación | Valor | Descripción |",
+                "|---|---|---|",
+                f"| **Exactitud de Respuesta (Keyword Overlap)** | "
+                f"`{(baseline.answer_correctness or 0.0):.2%}` | "
+                "Cobertura de hechos esperados en respuestas fundamentadas |",
+                f"| **Validez de Citas (`[n]`)** | "
+                f"`{(baseline.citation_validity_rate or 0.0):.2%}` | "
+                "Respuestas con citas válidas que apuntan al documento esperado |",
+                f"| **Latencia Media de Generación** | `{baseline.avg_generation_ms:.2f} ms` | "
+                "Tiempo promedio de síntesis y validación en el LLM |",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "> **Nota metodológica**: Esta corrida se ejecutó en modo determinista sin LLM "
+                "(solo recuperación y umbral vectorial). Para evaluar también la generación y "
+                "validez de citas del modelo de lenguaje, ejecutá "
+                "`uv run python scripts/evaluate.py --with-llm`.",
+                "",
+            ]
+        )
+
+    if test_summary is not None:
+        lines.extend(
+            [
+                "## 2.2 Validación en Conjunto de Prueba Independiente (Held-Out Test Set)",
+                "",
+                f"Evaluado sobre `{test_summary.total_cases}` preguntas no utilizadas "
+                f"para seleccionar el umbral (`{test_summary.positive_cases}` positivas, "
+                f"`{test_summary.abstention_cases}` de abstención):",
+                "",
+                "| Métrica (Held-Out Test Set) | Valor |",
+                "|---|---|",
+                f"| **Recall@k** | `{test_summary.recall_at_k:.2%}` |",
+                f"| **MRR** | `{test_summary.mrr:.4f}` |",
+                f"| **Refusal Accuracy** | `{test_summary.refusal_accuracy:.2%}` |",
+                f"| **Aislamiento entre KBs** | `{test_summary.isolation_rate:.2%}` |",
+                f"| **Puntaje Compuesto** | `{test_summary.composite_score:.4f}` |",
+                "",
+            ]
+        )
 
     if calibration:
         lines.extend(
@@ -317,9 +399,11 @@ def serialize_report(
     summary: EvalSummary,
     outcomes: list[CaseOutcome],
     calibration: list[CalibrationEntry] | None = None,
+    test_summary: EvalSummary | None = None,
 ) -> dict:
     return {
         "summary": asdict(summary),
+        "test_summary": asdict(test_summary) if test_summary is not None else None,
         "calibration_top": [
             {
                 "chunk_size": c.chunk_size,
@@ -344,6 +428,8 @@ def serialize_report(
                 "leaked_cross_kb": o.leaked_cross_kb,
                 "retrieval_ms": o.retrieval_ms,
                 "generation_ms": o.generation_ms,
+                "answer_correct": o.answer_correct,
+                "citations_valid": o.citations_valid,
             }
             for o in outcomes
         ],

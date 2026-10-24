@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"
     llm_timeout: float = 120.0  # segundos
+    max_output_tokens: int = 1024
 
     embedding_model: str = "intfloat/multilingual-e5-small"
     chroma_dir: Path = Path("data/chroma")
@@ -25,11 +26,12 @@ class Settings(BaseSettings):
     default_kb_id: str = "general"
     max_upload_mb: int = 20
     read_only_mode: bool = False
+    rate_limit_per_minute: int = 60
 
-    chunk_size: int = 1000
-    chunk_overlap: int = 150
+    chunk_size: int = 500
+    chunk_overlap: int = 75
     top_k: int = 4
-    min_relevance: float = 0.35  # se calibra en la fase de evaluación
+    min_relevance: float = 0.80  # calibrado empíricamente para intfloat/multilingual-e5-small
 
 
 @lru_cache

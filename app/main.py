@@ -15,6 +15,7 @@ from app.exceptions import (
     InvalidKnowledgeBaseError,
     KnowledgeBaseNotFoundError,
     LLMUnavailableError,
+    RateLimitExceededError,
     ReadOnlyModeError,
 )
 
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     _register(DuplicateKnowledgeBaseError, 409, "duplicate_knowledge_base")
     _register(InvalidKnowledgeBaseError, 422, "invalid_knowledge_base")
     _register(ReadOnlyModeError, 403, "read_only_mode")
+    _register(RateLimitExceededError, 429, "rate_limit_exceeded")
 
     return app
 

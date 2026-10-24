@@ -1,6 +1,7 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 NO_EVIDENCE = "NO_EVIDENCE"
+CITATION_REMINDER = "\n\n(Recordá citar las fuentes usadas con [1], [2], etc.)"
 
 SYSTEM_PROMPT = f"""Sos un asistente de documentación técnica. Respondé SOLO con la información \
 del CONTEXTO. Reglas:

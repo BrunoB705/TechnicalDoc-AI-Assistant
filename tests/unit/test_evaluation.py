@@ -7,6 +7,8 @@ from app.evaluation.metrics import (
     CaseOutcome,
     EvalCase,
     aggregate_outcomes,
+    check_answer_correctness,
+    check_citation_validity,
     compute_rank,
     hit_at_k,
     reciprocal_rank,
@@ -21,6 +23,7 @@ from app.evaluation.runner import (
 )
 
 DATASET_PATH = Path("eval/dataset.jsonl")
+TEST_DATASET_PATH = Path("eval/test_dataset.jsonl")
 CORPUS_PATH = Path("eval/corpus")
 
 
@@ -29,7 +32,7 @@ class DomainKeywordEmbeddings(Embeddings):
 
     GROUPS = (
         (
-            "cache", "caché", "l1", "l2", "l3", "lru",
+            "cache", "caché", "l1", "l2", "l3", "lru", "fifo",
             "write-through", "write-back", "correspondencia",
         ),
         (
@@ -37,20 +40,20 @@ class DomainKeywordEmbeddings(Embeddings):
             "overflow", "alu", "signo", "banderas",
         ),
         (
-            "pipeline", "risc", "raw", "forwarding",
-            "load-use", "predictor", "etapas", "saltos",
+            "pipeline", "risc", "raw", "forwarding", "estructural",
+            "load-use", "predictor", "etapas", "saltos", "instruction decode",
         ),
         (
-            "fastapi", "puerto", "8000", "question", "top_k",
-            "llm_timeout", "stream", "citas", "cita",
+            "fastapi", "puerto", "8000", "question", "top_k", "no_evidence",
+            "llm_timeout", "stream", "citas", "cita", "model_refused",
         ),
         (
-            "e5-small", "sha-256", "doc_id", "64 kb",
-            "upload_chunk_size", "5461", "sqlite", "embeddings",
+            "e5-small", "sha-256", "doc_id", "64 kb", "_rollback",
+            "upload_chunk_size", "5461", "sqlite", "embeddings", "catalog.sqlite3",
         ),
         (
-            "python 3.12", "2 gb", "openai_base_url",
-            "ingest.py", "10 minutos", "logger", "uvicorn",
+            "python 3.12", "2 gb", "openai_base_url", "max_upload_mb",
+            "ingest.py", "10 minutos", "logger", "uvicorn", "data/chroma",
         ),
     )
 
@@ -90,6 +93,19 @@ def test_dataset_jsonl_has_40_to_50_cases_with_all_categories():
             assert c.expected_source is None
 
 
+def test_held_out_test_dataset_is_disjoint_from_calibration_dataset():
+    dev_cases = load_dataset(DATASET_PATH)
+    test_cases = load_dataset(TEST_DATASET_PATH)
+    assert len(test_cases) >= 12
+    dev_ids = {c.id for c in dev_cases}
+    test_ids = {c.id for c in test_cases}
+    assert dev_ids.isdisjoint(test_ids)
+    dev_questions = {c.question.strip().lower() for c in dev_cases}
+    test_questions = {c.question.strip().lower() for c in test_cases}
+    assert dev_questions.isdisjoint(test_questions)
+    assert {c.category for c in test_cases} == {"positive", "negative", "cross_kb"}
+
+
 def test_hit_at_k_and_mrr_calculations():
     sources = ["otro.md", "memorias_y_cache.md", "tercero.md"]
     assert compute_rank(sources, "memorias_y_cache.md") == 2
@@ -97,6 +113,20 @@ def test_hit_at_k_and_mrr_calculations():
     assert hit_at_k(sources, "memorias_y_cache.md", k=2) is True
     assert reciprocal_rank(sources, "memorias_y_cache.md") == 0.5
     assert reciprocal_rank(sources, "inexistente.md") == 0.0
+
+
+def test_generation_quality_checks_answer_and_citation_validity():
+    assert check_answer_correctness(
+        "Tiene tres niveles (L1, L2 y L3) y latencia de 1 a 4 ciclos [1].",
+        "Tres niveles (L1, L2 y L3); la caché L1 tiene una latencia de 1 a 4 ciclos de reloj.",
+    )
+    assert not check_answer_correctness(
+        "El servidor usa HTTP.",
+        "Tres niveles (L1, L2 y L3); la caché L1 tiene una latencia de 1 a 4 ciclos de reloj.",
+    )
+    assert check_citation_validity(["memorias_y_cache.md"], "memorias_y_cache.md")
+    assert not check_citation_validity(["otro.md"], "memorias_y_cache.md")
+    assert not check_citation_validity([], "memorias_y_cache.md")
 
 
 def test_aggregate_outcomes_computes_recall_mrr_refusal_and_isolation():
@@ -119,15 +149,33 @@ def test_aggregate_outcomes_computes_recall_mrr_refusal_and_isolation():
     assert summary.negative_refusal_rate == 1.0
     assert summary.cross_kb_refusal_rate == 1.0
     assert summary.isolation_rate == 1.0
+    assert summary.evaluated_with_llm is False
 
 
 def test_evaluate_dataset_and_calibration_grid_offline(tmp_path):
     cases = load_dataset(DATASET_PATH)
+    test_cases = load_dataset(TEST_DATASET_PATH)
     emb = DomainKeywordEmbeddings()
     vs, settings, kb_svc = build_eval_index(
-        CORPUS_PATH, emb, tmp_path / "idx", chunk_size=1000, chunk_overlap=150
+        CORPUS_PATH, emb, tmp_path / "idx", chunk_size=500, chunk_overlap=75
     )
-    llm = FakeListChatModel(responses=["Respuesta con cita [1]."] * len(cases))
+    # 1. Corrida sin LLM (solo recuperación)
+    ret_summary, _ = evaluate_dataset(
+        test_cases,
+        vs,
+        settings,
+        kb_service=kb_svc,
+        llm=None,
+        top_k=4,
+        min_relevance=0.25,
+    )
+    assert ret_summary.evaluated_with_llm is False
+    assert ret_summary.answer_correctness is None
+
+    # 2. Corrida con LLM (incluye métricas de generación y citas)
+    llm = FakeListChatModel(
+        responses=["Tres niveles L1 L2 L3 con 1 a 4 ciclos y 256 KB [1]."] * len(cases)
+    )
     summary, outcomes = evaluate_dataset(
         cases,
         vs,
@@ -138,6 +186,8 @@ def test_evaluate_dataset_and_calibration_grid_offline(tmp_path):
         min_relevance=0.25,
     )
     assert summary.total_cases == len(cases)
+    assert summary.evaluated_with_llm is True
+    assert summary.citation_validity_rate is not None
     assert summary.isolation_rate == 1.0
     assert summary.recall_at_k >= 0.85
     assert summary.refusal_accuracy >= 0.70
@@ -153,8 +203,13 @@ def test_evaluate_dataset_and_calibration_grid_offline(tmp_path):
     assert len(grid) == 8
     assert grid[0].summary.composite_score >= grid[-1].summary.composite_score
 
-    md = format_markdown_report(summary, outcomes, calibration=grid)
-    assert "Recall@k" in md and "Calibración Empírica" in md
-    payload = serialize_report(summary, outcomes, grid)
+    md = format_markdown_report(
+        summary, outcomes, calibration=grid, test_summary=ret_summary
+    )
+    assert "Recall@k" in md
+    assert "Calibración Empírica" in md
+    assert "Held-Out Test Set" in md
+    payload = serialize_report(summary, outcomes, grid, test_summary=ret_summary)
     assert payload["summary"]["total_cases"] == len(cases)
+    assert payload["test_summary"]["total_cases"] == len(test_cases)
     assert len(payload["calibration_top"]) == 8

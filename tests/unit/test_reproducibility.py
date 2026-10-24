@@ -1,6 +1,62 @@
+import subprocess
+import sys
 from pathlib import Path
 
+from app.config import Settings
+from app.rag.embeddings import get_embeddings
 from scripts.download_demo_docs import DEMO_SPECS, materialize_demo_docs
+
+
+def test_settings_defaults_and_env_overrides(monkeypatch):
+    # Limpiar posibles variables de entorno para verificar los defaults calibrados del código
+    for key in (
+        "CHUNK_SIZE",
+        "CHUNK_OVERLAP",
+        "TOP_K",
+        "MIN_RELEVANCE",
+        "READ_ONLY_MODE",
+        "RATE_LIMIT_PER_MINUTE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    s_default = Settings(_env_file=None)
+    assert s_default.chunk_size == 500
+    assert s_default.chunk_overlap == 75
+    assert s_default.top_k == 4
+    assert s_default.min_relevance == 0.80
+    assert s_default.read_only_mode is False
+    assert s_default.rate_limit_per_minute == 60
+
+    monkeypatch.setenv("CHUNK_SIZE", "750")
+    monkeypatch.setenv("MIN_RELEVANCE", "0.837")
+    monkeypatch.setenv("READ_ONLY_MODE", "true")
+    monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "15")
+
+    s_override = Settings(_env_file=None)
+    assert s_override.chunk_size == 750
+    assert s_override.min_relevance == 0.837
+    assert s_override.read_only_mode is True
+    assert s_override.rate_limit_per_minute == 15
+
+
+def test_get_embeddings_reuses_singleton_instance():
+    s = Settings(_env_file=None)
+    emb1 = get_embeddings(s, lazy=True)
+    emb2 = get_embeddings(s, lazy=True)
+    assert emb1 is emb2
+
+
+def test_ingest_cli_accepts_kb_name_and_description():
+    proc = subprocess.run(
+        [sys.executable, "scripts/ingest.py", "--help"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "--kb" in proc.stdout
+    assert "--kb-name" in proc.stdout
+    assert "--kb-description" in proc.stdout
+    assert "--reset" in proc.stdout
 
 
 def test_materialize_demo_docs_offline_creates_kb_folders(tmp_path):

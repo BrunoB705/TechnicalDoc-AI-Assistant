@@ -14,29 +14,28 @@ from app.config import Settings
 from app.exceptions import EmptyIndexError, LLMUnavailableError
 from app.knowledge_bases.service import KnowledgeBaseService
 from app.rag.citations import extract_citations, strip_invalid_citations
-from app.rag.prompts import NO_EVIDENCE, PROMPT
+from app.rag.prompts import CITATION_REMINDER, NO_EVIDENCE, PROMPT
 
 logger = logging.getLogger("rag")
 
 _LLM_CONNECTION_ERRORS = (
     openai.APIConnectionError,
     openai.APITimeoutError,
-    httpx.TransportError,
+    httpx.ConnectError,
+    httpx.TimeoutException,
     ConnectionError,
     TimeoutError,
 )
+_LLM_UNAVAILABLE_MSG = "El modelo de lenguaje no está disponible o agotó el tiempo de espera."
 
 MESSAGES = {
+    "below_threshold": "No se encontró evidencia suficientemente relevante en la documentación.",
     "empty_knowledge_base": "La base seleccionada no contiene documentos cargados.",
-    "below_threshold": "No encontré evidencia suficiente en los documentos para responder.",
-    "model_refused": "Los documentos recuperados no alcanzan para responder la pregunta.",
-    "no_citations": "La respuesta no cita ninguna fuente, por lo que no pudo verificarse.",
+    "model_refused": "La documentación disponible no contiene información para responder esto.",
+    "no_citations": (
+        "No se pudo verificar la respuesta contra las fuentes recuperadas (faltan citas)."
+    ),
 }
-
-CITATION_REMINDER = (
-    "\n\nRecordatorio: citá cada afirmación con el número de la fuente entre corchetes, "
-    "por ejemplo [1]."
-)
 
 
 @dataclass
@@ -54,17 +53,17 @@ class SourceHit:
 class QueryResult:
     answer: str | None
     grounded: bool
-    sources: list[SourceHit] = field(default_factory=list)  # solo las realmente citadas
-    retrieved: list[SourceHit] = field(default_factory=list)  # todas las recuperadas
-    reason: str | None = None  # por qué no hay respuesta fundamentada
-    message: str | None = None  # mensaje explicativo cuando grounded=False
+    sources: list[SourceHit] = field(default_factory=list)
+    retrieved: list[SourceHit] = field(default_factory=list)
+    reason: str | None = None
+    message: str | None = None
     knowledge_base_id: str = "general"
 
 
-def _to_hit(i: int, doc: Document, score: float) -> SourceHit:
+def _to_hit(idx: int, doc: Document, score: float) -> SourceHit:
     m = doc.metadata
     return SourceHit(
-        id=i,
+        id=idx,
         source=m.get("source", "desconocido"),
         section=m.get("section"),
         page=m.get("page"),
@@ -100,7 +99,8 @@ class RAGService:
         try:
             msg = (PROMPT | self.llm).invoke({"context": context, "question": question})
         except _LLM_CONNECTION_ERRORS as exc:
-            raise LLMUnavailableError(f"El modelo de lenguaje no responde: {exc}") from exc
+            logger.warning(json.dumps({"event": "llm_error", "error": type(exc).__name__}))
+            raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
         return str(msg.content).strip()
 
     def _resolve_kb(self, knowledge_base_id: str | None) -> tuple[str, str, bool]:
@@ -130,45 +130,18 @@ class RAGService:
         retrieved = [_to_hit(i, d, s) for i, (d, s) in enumerate(hits, start=1)]
         return hits, retrieved, retrieval_ms
 
-    def answer(
+    def _finalize_generation(
         self,
+        text: str,
+        context: str,
         question: str,
-        top_k: int | None = None,
-        knowledge_base_id: str | None = None,
+        retrieved: list[SourceHit],
+        hits: list[tuple[Document, float]],
+        retrieval_ms: int,
+        t1: float,
+        kb_id: str,
     ) -> QueryResult:
-        kb_id, kb_name, is_empty_kb = self._resolve_kb(knowledge_base_id)
-        if is_empty_kb:
-            msg = f"La base '{kb_name}' no contiene documentos cargados."
-            self._log(question, 0, 0, 0, 0, "empty_knowledge_base", kb_id=kb_id)
-            return QueryResult(
-                None,
-                False,
-                reason="empty_knowledge_base",
-                message=msg,
-                knowledge_base_id=kb_id,
-            )
-
-        hits, retrieved, retrieval_ms = self._retrieve(question, top_k, kb_id=kb_id)
-        if not hits:
-            msg = (
-                f"No se encontró evidencia suficiente en la base '{kb_name}'."
-                if self.kb_service is not None
-                else MESSAGES["below_threshold"]
-            )
-            self._log(
-                question, retrieval_ms, 0, len(retrieved), 0, "below_threshold", kb_id=kb_id
-            )
-            return QueryResult(
-                None,
-                False,
-                reason="below_threshold",
-                message=msg,
-                knowledge_base_id=kb_id,
-            )
-
-        context = format_context(hits)
-        t1 = time.perf_counter()
-        text = self._generate(context, question)
+        """Política unificada de validación de citas, reintento guiado, abstención y logging."""
         if NO_EVIDENCE not in text and not extract_citations(text):
             # el modelo olvidó citar: un reintento con recordatorio
             text = self._generate(context, question + CITATION_REMINDER)
@@ -232,6 +205,49 @@ class RAGService:
             sources=sources,
             retrieved=retrieved,
             knowledge_base_id=kb_id,
+        )
+
+    def answer(
+        self,
+        question: str,
+        top_k: int | None = None,
+        knowledge_base_id: str | None = None,
+    ) -> QueryResult:
+        kb_id, kb_name, is_empty_kb = self._resolve_kb(knowledge_base_id)
+        if is_empty_kb:
+            msg = f"La base '{kb_name}' no contiene documentos cargados."
+            self._log(question, 0, 0, 0, 0, "empty_knowledge_base", kb_id=kb_id)
+            return QueryResult(
+                None,
+                False,
+                reason="empty_knowledge_base",
+                message=msg,
+                knowledge_base_id=kb_id,
+            )
+
+        hits, retrieved, retrieval_ms = self._retrieve(question, top_k, kb_id=kb_id)
+        if not hits:
+            msg = (
+                f"No se encontró evidencia suficiente en la base '{kb_name}'."
+                if self.kb_service is not None
+                else MESSAGES["below_threshold"]
+            )
+            self._log(
+                question, retrieval_ms, 0, len(retrieved), 0, "below_threshold", kb_id=kb_id
+            )
+            return QueryResult(
+                None,
+                False,
+                reason="below_threshold",
+                message=msg,
+                knowledge_base_id=kb_id,
+            )
+
+        context = format_context(hits)
+        t1 = time.perf_counter()
+        text = self._generate(context, question)
+        return self._finalize_generation(
+            text, context, question, retrieved, hits, retrieval_ms, t1, kb_id
         )
 
     @staticmethod
@@ -301,6 +317,7 @@ class RAGService:
         context = format_context(hits)
         chain = PROMPT | self.llm
         full_text = []
+        t1 = time.perf_counter()
 
         try:
             async for chunk in chain.astream({"context": context, "question": question}):
@@ -309,23 +326,48 @@ class RAGService:
                     full_text.append(content)
                     yield {"event": "token", "data": {"token": content}}
         except _LLM_CONNECTION_ERRORS as exc:
-            yield {"event": "error", "data": {"error": "llm_unavailable", "detail": str(exc)}}
+            logger.warning(json.dumps({"event": "llm_error", "error": type(exc).__name__}))
+            self._log(
+                question,
+                retrieval_ms,
+                int((time.perf_counter() - t1) * 1000),
+                len(retrieved),
+                len(hits),
+                "llm_unavailable",
+                kb_id=kb_id,
+            )
+            yield {
+                "event": "error",
+                "data": {"error": "llm_unavailable", "detail": _LLM_UNAVAILABLE_MSG},
+            }
             return
 
         accumulated = "".join(full_text).strip()
-        if NO_EVIDENCE in accumulated:
-            yield self._end_event("model_refused")
+        try:
+            result = self._finalize_generation(
+                accumulated, context, question, retrieved, hits, retrieval_ms, t1, kb_id
+            )
+        except LLMUnavailableError as exc:
+            self._log(
+                question,
+                retrieval_ms,
+                int((time.perf_counter() - t1) * 1000),
+                len(retrieved),
+                len(hits),
+                "llm_unavailable",
+                kb_id=kb_id,
+            )
+            yield {"event": "error", "data": {"error": "llm_unavailable", "detail": str(exc)}}
             return
 
-        valid_ids = {h.id for h in retrieved}
-        cited = [n for n in extract_citations(accumulated) if n in valid_ids]
-        answer = strip_invalid_citations(accumulated, valid_ids)
-        if not cited:
-            yield self._end_event("no_citations", answer=answer)
-            return
-
-        sources = [h for h in retrieved if h.id in cited]
-        yield self._end_event(None, answer=answer, sources=sources, cited=cited)
+        cited_ids = [s.id for s in result.sources]
+        yield self._end_event(
+            result.reason,
+            answer=result.answer,
+            sources=result.sources,
+            cited=cited_ids,
+            message=result.message,
+        )
 
     @staticmethod
     def _log(
