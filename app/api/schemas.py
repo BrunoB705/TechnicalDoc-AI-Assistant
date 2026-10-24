@@ -5,6 +5,7 @@ class QueryRequest(BaseModel):
     question: str = Field(min_length=3, max_length=1000)
     top_k: int | None = Field(default=None, ge=1, le=10)
     knowledge_base_id: str | None = Field(default=None, min_length=1, max_length=64)
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class Source(BaseModel):
@@ -26,6 +27,7 @@ class QueryResponse(BaseModel):
     message: str | None = None
     reason: str | None = None
     knowledge_base_id: str = "general"
+    conversation_id: str | None = None
 
 
 class ErrorResponse(BaseModel):

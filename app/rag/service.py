@@ -11,10 +11,18 @@ from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
 
 from app.config import Settings
+from app.conversations.service import ConversationService
 from app.exceptions import EmptyIndexError, LLMUnavailableError
 from app.knowledge_bases.service import KnowledgeBaseService
 from app.rag.citations import extract_citations, strip_invalid_citations
-from app.rag.prompts import CITATION_REMINDER, NO_EVIDENCE, PROMPT
+from app.rag.prompts import (
+    CITATION_REMINDER,
+    CONDENSE_PROMPT,
+    CONVERSATIONAL_PROMPT,
+    NO_EVIDENCE,
+    PROMPT,
+    format_history,
+)
 
 logger = logging.getLogger("rag")
 
@@ -58,6 +66,7 @@ class QueryResult:
     reason: str | None = None
     message: str | None = None
     knowledge_base_id: str = "general"
+    conversation_id: str | None = None
 
 
 def _to_hit(idx: int, doc: Document, score: float) -> SourceHit:
@@ -89,19 +98,74 @@ class RAGService:
         llm: BaseChatModel,
         settings: Settings,
         kb_service: KnowledgeBaseService | None = None,
+        conversation_service: ConversationService | None = None,
     ):
         self.vs = vectorstore
         self.llm = llm
         self.settings = settings
         self.kb_service = kb_service
+        self.conversation_service = conversation_service or ConversationService(settings)
 
-    def _generate(self, context: str, question: str) -> str:
+    def _condense_question(self, history: list[tuple[str, str]], question: str) -> str:
+        if not history:
+            return question
         try:
-            msg = (PROMPT | self.llm).invoke({"context": context, "question": question})
+            msg = (CONDENSE_PROMPT | self.llm).invoke(
+                {"history": format_history(history), "question": question}
+            )
+        except _LLM_CONNECTION_ERRORS as exc:
+            logger.warning(json.dumps({"event": "llm_error", "error": type(exc).__name__}))
+            raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
+        return str(msg.content).strip() or question
+
+    def _generate(
+        self,
+        context: str,
+        question: str,
+        history: list[tuple[str, str]] | None = None,
+    ) -> str:
+        try:
+            if history:
+                msg = (CONVERSATIONAL_PROMPT | self.llm).invoke(
+                    {
+                        "history": format_history(history),
+                        "context": context,
+                        "question": question,
+                    }
+                )
+            else:
+                msg = (PROMPT | self.llm).invoke({"context": context, "question": question})
         except _LLM_CONNECTION_ERRORS as exc:
             logger.warning(json.dumps({"event": "llm_error", "error": type(exc).__name__}))
             raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
         return str(msg.content).strip()
+
+    def _resolve_history(self, conversation_id: str | None) -> list[tuple[str, str]]:
+        if conversation_id and self.conversation_service is not None:
+            return self.conversation_service.get_recent_history(
+                conversation_id, self.settings.conversation_window_exchanges
+            )
+        return []
+
+    def _save_turn(
+        self,
+        conversation_id: str | None,
+        question: str,
+        result: QueryResult,
+        kb_id: str,
+    ) -> None:
+        if conversation_id and self.conversation_service is not None:
+            self.conversation_service.record_turn(
+                conversation_id=conversation_id,
+                question=question,
+                answer=result.answer,
+                grounded=result.grounded,
+                reason=result.reason,
+                message=result.message,
+                sources=[s.__dict__ for s in result.sources],
+                retrieved=[s.__dict__ for s in result.retrieved],
+                kb_id=kb_id,
+            )
 
     def _resolve_kb(self, knowledge_base_id: str | None) -> tuple[str, str, bool]:
         """Valida la KB y devuelve (kb_id, kb_name, is_empty_kb)."""
@@ -140,11 +204,13 @@ class RAGService:
         retrieval_ms: int,
         t1: float,
         kb_id: str,
+        history: list[tuple[str, str]] | None = None,
+        conversation_id: str | None = None,
     ) -> QueryResult:
         """Política unificada de validación de citas, reintento guiado, abstención y logging."""
         if NO_EVIDENCE not in text and not extract_citations(text):
             # el modelo olvidó citar: un reintento con recordatorio
-            text = self._generate(context, question + CITATION_REMINDER)
+            text = self._generate(context, question + CITATION_REMINDER, history=history)
         generation_ms = int((time.perf_counter() - t1) * 1000)
 
         if NO_EVIDENCE in text:
@@ -164,6 +230,7 @@ class RAGService:
                 reason="model_refused",
                 message=MESSAGES["model_refused"],
                 knowledge_base_id=kb_id,
+                conversation_id=conversation_id,
             )
 
         valid_ids = {h.id for h in retrieved}
@@ -186,6 +253,7 @@ class RAGService:
                 reason="no_citations",
                 message=MESSAGES["no_citations"],
                 knowledge_base_id=kb_id,
+                conversation_id=conversation_id,
             )
 
         sources = [h for h in retrieved if h.id in cited]
@@ -205,6 +273,7 @@ class RAGService:
             sources=sources,
             retrieved=retrieved,
             knowledge_base_id=kb_id,
+            conversation_id=conversation_id,
         )
 
     def answer(
@@ -212,43 +281,61 @@ class RAGService:
         question: str,
         top_k: int | None = None,
         knowledge_base_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> QueryResult:
         kb_id, kb_name, is_empty_kb = self._resolve_kb(knowledge_base_id)
+        history = self._resolve_history(conversation_id)
         if is_empty_kb:
             msg = f"La base '{kb_name}' no contiene documentos cargados."
             self._log(question, 0, 0, 0, 0, "empty_knowledge_base", kb_id=kb_id)
-            return QueryResult(
+            result = QueryResult(
                 None,
                 False,
                 reason="empty_knowledge_base",
                 message=msg,
                 knowledge_base_id=kb_id,
+                conversation_id=conversation_id,
             )
+            self._save_turn(conversation_id, question, result, kb_id)
+            return result
 
-        hits, retrieved, retrieval_ms = self._retrieve(question, top_k, kb_id=kb_id)
+        search_query = self._condense_question(history, question)
+        hits, retrieved, retrieval_ms = self._retrieve(search_query, top_k, kb_id=kb_id)
         if not hits:
             msg = (
                 f"No se encontró evidencia suficiente en la base '{kb_name}'."
                 if self.kb_service is not None
                 else MESSAGES["below_threshold"]
             )
-            self._log(
-                question, retrieval_ms, 0, len(retrieved), 0, "below_threshold", kb_id=kb_id
-            )
-            return QueryResult(
+            self._log(question, retrieval_ms, 0, len(retrieved), 0, "below_threshold", kb_id=kb_id)
+            result = QueryResult(
                 None,
                 False,
                 reason="below_threshold",
                 message=msg,
                 knowledge_base_id=kb_id,
+                conversation_id=conversation_id,
             )
+            self._save_turn(conversation_id, question, result, kb_id)
+            return result
 
         context = format_context(hits)
         t1 = time.perf_counter()
-        text = self._generate(context, question)
-        return self._finalize_generation(
-            text, context, question, retrieved, hits, retrieval_ms, t1, kb_id
+        text = self._generate(context, question, history=history)
+        result = self._finalize_generation(
+            text,
+            context,
+            question,
+            retrieved,
+            hits,
+            retrieval_ms,
+            t1,
+            kb_id,
+            history=history,
+            conversation_id=conversation_id,
         )
+        self._save_turn(conversation_id, question, result, kb_id)
+        return result
 
     @staticmethod
     def _end_event(
@@ -257,21 +344,25 @@ class RAGService:
         sources: list[SourceHit] | None = None,
         cited: list[int] | None = None,
         message: str | None = None,
+        conversation_id: str | None = None,
     ) -> dict:
         """Evento final del stream. Mismo contrato para éxito y para toda abstención."""
         sources = sources or []
         default_msg = MESSAGES.get(reason) if reason else None
         resolved_msg = message if message is not None else default_msg
+        data = {
+            "grounded": reason is None,
+            "reason": reason,
+            "message": resolved_msg,
+            "answer": answer,
+            "sources": [s.__dict__ for s in sources],
+            "cited_ids": cited or [],
+        }
+        if conversation_id is not None:
+            data["conversation_id"] = conversation_id
         return {
             "event": "end",
-            "data": {
-                "grounded": reason is None,
-                "reason": reason,
-                "message": resolved_msg,
-                "answer": answer,
-                "sources": [s.__dict__ for s in sources],
-                "cited_ids": cited or [],
-            },
+            "data": data,
         }
 
     async def stream_answer(
@@ -279,30 +370,58 @@ class RAGService:
         question: str,
         top_k: int | None = None,
         knowledge_base_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> AsyncIterator[dict]:
         """Transmite la respuesta token a token como eventos Server-Sent Events (SSE).
 
         Contrato: `retrieved` (opcional) -> `token`* -> `end` (siempre, con grounded/reason/
-        message/answer/sources/cited_ids). `error` queda reservado a fallos reales (LLM caído).
+        message/answer/sources/cited_ids/conversation_id). `error` queda reservado a fallos
+        reales (LLM caído).
         """
         kb_id, kb_name, is_empty_kb = self._resolve_kb(knowledge_base_id)
+        history = self._resolve_history(conversation_id)
         if is_empty_kb:
             msg = f"La base '{kb_name}' no contiene documentos cargados."
             self._log(question, 0, 0, 0, 0, "empty_knowledge_base", kb_id=kb_id)
-            yield self._end_event("empty_knowledge_base", message=msg)
+            empty_res = QueryResult(
+                None,
+                False,
+                reason="empty_knowledge_base",
+                message=msg,
+                knowledge_base_id=kb_id,
+                conversation_id=conversation_id,
+            )
+            self._save_turn(conversation_id, question, empty_res, kb_id)
+            yield self._end_event(
+                "empty_knowledge_base", message=msg, conversation_id=conversation_id
+            )
             return
 
-        hits, retrieved, retrieval_ms = self._retrieve(question, top_k, kb_id=kb_id)
+        try:
+            search_query = self._condense_question(history, question)
+        except LLMUnavailableError as exc:
+            self._log(question, 0, 0, 0, 0, "llm_unavailable", kb_id=kb_id)
+            yield {"event": "error", "data": {"error": "llm_unavailable", "detail": str(exc)}}
+            return
+
+        hits, retrieved, retrieval_ms = self._retrieve(search_query, top_k, kb_id=kb_id)
         if not hits:
             msg = (
                 f"No se encontró evidencia suficiente en la base '{kb_name}'."
                 if self.kb_service is not None
                 else MESSAGES["below_threshold"]
             )
-            self._log(
-                question, retrieval_ms, 0, len(retrieved), 0, "below_threshold", kb_id=kb_id
+            self._log(question, retrieval_ms, 0, len(retrieved), 0, "below_threshold", kb_id=kb_id)
+            below_res = QueryResult(
+                None,
+                False,
+                reason="below_threshold",
+                message=msg,
+                knowledge_base_id=kb_id,
+                conversation_id=conversation_id,
             )
-            yield self._end_event("below_threshold", message=msg)
+            self._save_turn(conversation_id, question, below_res, kb_id)
+            yield self._end_event("below_threshold", message=msg, conversation_id=conversation_id)
             return
 
         # Notificar fuentes recuperadas inicialmente
@@ -315,12 +434,22 @@ class RAGService:
         }
 
         context = format_context(hits)
-        chain = PROMPT | self.llm
+        if history:
+            chain = CONVERSATIONAL_PROMPT | self.llm
+            chain_input = {
+                "history": format_history(history),
+                "context": context,
+                "question": question,
+            }
+        else:
+            chain = PROMPT | self.llm
+            chain_input = {"context": context, "question": question}
+
         full_text = []
         t1 = time.perf_counter()
 
         try:
-            async for chunk in chain.astream({"context": context, "question": question}):
+            async for chunk in chain.astream(chain_input):
                 content = chunk.content if hasattr(chunk, "content") else str(chunk)
                 if content:
                     full_text.append(content)
@@ -345,7 +474,16 @@ class RAGService:
         accumulated = "".join(full_text).strip()
         try:
             result = self._finalize_generation(
-                accumulated, context, question, retrieved, hits, retrieval_ms, t1, kb_id
+                accumulated,
+                context,
+                question,
+                retrieved,
+                hits,
+                retrieval_ms,
+                t1,
+                kb_id,
+                history=history,
+                conversation_id=conversation_id,
             )
         except LLMUnavailableError as exc:
             self._log(
@@ -360,6 +498,7 @@ class RAGService:
             yield {"event": "error", "data": {"error": "llm_unavailable", "detail": str(exc)}}
             return
 
+        self._save_turn(conversation_id, question, result, kb_id)
         cited_ids = [s.id for s in result.sources]
         yield self._end_event(
             result.reason,
@@ -367,6 +506,7 @@ class RAGService:
             sources=result.sources,
             cited=cited_ids,
             message=result.message,
+            conversation_id=conversation_id,
         )
 
     @staticmethod

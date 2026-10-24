@@ -35,7 +35,14 @@ def get_knowledge_base_service() -> KnowledgeBaseService:
 def get_rag_service() -> RAGService:
     settings = get_settings()
     kb_svc = get_knowledge_base_service()
-    return RAGService(get_shared_vectorstore(), get_llm(settings), settings, kb_service=kb_svc)
+    conv_svc = get_conversation_service()
+    return RAGService(
+        get_shared_vectorstore(),
+        get_llm(settings),
+        settings,
+        kb_service=kb_svc,
+        conversation_service=conv_svc,
+    )
 
 
 @lru_cache
