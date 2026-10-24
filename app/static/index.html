@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TechnicalDoc AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=5">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 </head>
 <body>
   <header class="topbar">
@@ -35,7 +36,16 @@
         <label class="topk">k
           <input id="top-k" type="number" min="1" max="10" placeholder="auto">
         </label>
-        <button id="ask-btn" type="submit">Preguntar</button>
+        <div class="ask-actions">
+          <button id="download-btn" type="button" class="icon-btn" disabled title="Descargar respuesta (.txt)" aria-label="Descargar respuesta (.txt)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </button>
+          <button id="ask-btn" type="submit">Preguntar</button>
+        </div>
       </form>
     </section>
 
@@ -45,6 +55,17 @@
         <input id="file" type="file" accept=".md,.txt,.pdf" required>
         <button type="submit" id="upload-btn">Subir</button>
       </form>
+      <div id="retrain-container" class="retrain-container" hidden>
+        <div class="retrain-header">
+          <span id="retrain-spinner" class="retrain-spinner" aria-hidden="true"></span>
+          <span id="retrain-status-text" class="retrain-status-text">Reentrenando base...</span>
+          <span id="retrain-pct" class="retrain-pct">0%</span>
+        </div>
+        <div class="retrain-progress-track">
+          <div id="retrain-progress-bar" class="retrain-progress-fill" style="width: 0%;"></div>
+        </div>
+        <div id="retrain-detail" class="retrain-detail">Subiendo archivo...</div>
+      </div>
       <div id="upload-status" class="status" role="status"></div>
       <ul id="docs-list" class="docs-list"></ul>
     </aside>
@@ -67,6 +88,10 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked-katex-extension/lib/index.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>
