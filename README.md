@@ -38,6 +38,7 @@ TOP_K=4
 MIN_RELEVANCE=0.80
 READ_ONLY_MODE=false
 RATE_LIMIT_PER_MINUTE=60
+CONVERSATION_WINDOW_EXCHANGES=6
 ```
 
 ### 3. Cargar el Corpus Público de Demostración (Opcional)
@@ -84,6 +85,11 @@ docker run --rm -p 8000:8000 -v "${PWD}/data:/app/data" --env-file .env technica
 docker run --rm -p 8000:8000 -v "${PWD}/data:/app/data" -e READ_ONLY_MODE=true -e RATE_LIMIT_PER_MINUTE=30 --env-file .env technicaldoc-ai-assistant:1.0.0
 ```
 
+> **Comportamiento del modo solo lectura (`READ_ONLY_MODE=true`):**
+> - **Protección de datos:** Bloquea la creación/eliminación de Knowledge Bases y la subida/eliminación de documentos con HTTP `403 Forbidden` (`read_only_mode`).
+> - **Gestión de conversaciones:** Impide crear (`POST /conversations`), renombrar (`PATCH /conversations/{id}`) y eliminar (`DELETE /conversations/{id}`) conversaciones con HTTP `403 Forbidden`.
+> - **Persistencia y contexto:** Permite realizar consultas RAG (`/query` y `/query/stream`), pero omite registrar nuevos turnos en la base SQLite (`record_turn`). Como consecuencia, en modo solo lectura el chat opera de forma efímera/stateless sin persistencia de historial ni condensación de contexto para preguntas de seguimiento consecutivas.
+
 > **Conexión desde Docker hacia un LLM corriendo en el host (LM Studio / Ollama):**
 > Dentro de un contenedor Docker, `localhost` apunta al propio contenedor y no a tu máquina anfitriona. En **Docker Desktop (Windows / macOS)** (o en Linux agregando `--add-host=host.docker.internal:host-gateway`), configurá la URL del proveedor usando `host.docker.internal`:
 > - **LM Studio:** `-e OPENAI_BASE_URL=http://host.docker.internal:1234/v1` (asegurándote de activar *"Serve on Local Network"* en LM Studio).
@@ -116,26 +122,39 @@ docker run --rm -p 8000:8000 -v "${PWD}/data:/app/data" -e READ_ONLY_MODE=true -
 | `GET` | `/knowledge-bases/{kb_id}/documents/{doc_id}` | Detalle de un documento específico en `kb_id`. |
 | `DELETE` | `/knowledge-bases/{kb_id}/documents/{doc_id}` | Elimina el documento del disco y sus vectores de ChromaDB (`204`, `403` en solo lectura). |
 
+### Historial y Conversaciones Multi-Turn
+| Método | Ruta | Descripción |
+|---|---|---|
+| `GET` | `/conversations` | Lista todas las conversaciones ordenadas por última interacción (`200`). |
+| `POST` | `/conversations` | Crea una nueva conversación vinculada a una Knowledge Base (`201`, `403` en solo lectura, `422`). |
+| `GET` | `/conversations/{conversation_id}` | Detalle completo de la conversación con historial de mensajes, citas y fragmentos recuperados (`200`, `404`). |
+| `PATCH` | `/conversations/{conversation_id}` | Renombra el título de la conversación (`200`, `403`, `404`, `422`). |
+| `DELETE` | `/conversations/{conversation_id}` | Elimina la conversación y sus mensajes asociados en cascada (`204`, `403`, `404`). |
+
 ### Consulta RAG (Contrato Unificado Síncrono y Streaming)
 | Método | Ruta | Descripción |
 |---|---|---|
-| `POST` | `/query` | Consulta síncrona en el ámbito de `knowledge_base_id` con validación de citas, reintento guiado y latencia (`200`, `404`, `409`, `429`, `503`). |
-| `POST` | `/query/stream` | Consulta en streaming SSE (`retrieved` → `token`* → `end`) con la misma política de validación, reintento de citas y aislamiento por KB. |
+| `POST` | `/query` | Consulta síncrona en el ámbito de `knowledge_base_id` (o inferida de `conversation_id`), con validación de citas, reintento guiado, latencia y condensación contextual de preguntas de seguimiento (`200`, `404`, `409`, `422`, `429`, `503`). |
+| `POST` | `/query/stream` | Consulta en streaming SSE (`retrieved` → `token`* → `end`) con la misma política de validación, reintento de citas, aislamiento por KB y persistencia de turnos. |
 
 Ejemplo de `POST /query`:
 ```json
 {
   "question": "¿Cuántos niveles de memoria caché implementan los procesadores modernos?",
   "knowledge_base_id": "arquitectura",
+  "conversation_id": "conv_abc123",
   "top_k": 4
 }
 ```
+
+> **Memoria conversacional y aislamiento:**
+> Cuando se provee `conversation_id`, el sistema consulta el historial reciente (hasta `CONVERSATION_WINDOW_EXCHANGES`) y utiliza el LLM para reformular preguntas de seguimiento dependientes de contexto en una consulta autocontenida (*standalone query*) antes de la búsqueda vectorial en ChromaDB. Si se especifica un `knowledge_base_id` contradictorio con la base original de la conversación, el backend rechaza la consulta con HTTP `422 Unprocessable Entity` (`invalid_conversation`) garantizando aislamiento estricto.
 
 ---
 
 ## 🧪 Pruebas Automatizadas y Calidad de Código
 
-La suite cuenta con **71 pruebas unitarias e integradas** que verifican configuración, reutilización de embeddings, ingesta transaccional, aislamiento entre Knowledge Bases, paridad `/query` vs `/query/stream`, evaluación cuantitativa (dev + test set independiente), reproducibilidad y protecciones (`READ_ONLY_MODE` y rate limiting) sin requerir conexión a internet ni LLMs externos:
+La suite cuenta con **99 pruebas unitarias e integradas** que verifican configuración, reutilización de embeddings, ingesta transaccional, aislamiento entre Knowledge Bases, paridad `/query` vs `/query/stream`, evaluación cuantitativa (dev + test set independiente), reproducibilidad, protecciones (`READ_ONLY_MODE` y rate limiting) y persistencia/reformulación conversacional sin requerir conexión a internet ni LLMs externos:
 
 ```powershell
 # Ejecutar toda la suite de tests
@@ -159,6 +178,7 @@ uv run ruff check .
 - [x] **Fase 7**: Evaluación cuantitativa RAG (Recall@k, MRR, abstención, aislamiento y calibración de umbrales).
 - [x] **Fase 8**: Reproducibilidad, CI/CD y contenerización (Docker, GitHub Actions, corpus demo).
 - [x] **Fase 9**: Hardening para demo pública (`READ_ONLY_MODE`, rate limiting, `/health/live`, `/health/ready` y documentación).
+- [x] **Fase 10**: Memoria conversacional y persistencia multi-turn (historial en SQLite, endpoints CRUD de conversaciones, condensación de preguntas de seguimiento y aislamiento KB en chat).
 
 ---
 
