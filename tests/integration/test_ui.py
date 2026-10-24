@@ -41,3 +41,46 @@ def test_app_js_handles_conversations_api(client):
     assert "/conversations" in js
     assert "activeConversationId" in js
 
+
+def test_ui_has_download_conversation_button(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    assert 'id="download-btn"' in html
+    assert "Descargar conversación (.txt)" in html
+
+
+def test_app_js_downloads_full_conversation_with_user_and_bot_prefixes(client):
+    r = client.get("/static/app.js")
+    assert r.status_code == 200
+    js = r.text
+    assert "formatConversationForDownload" in js
+    assert "USUARIO:" in js
+    assert "BOT:" in js
+    assert "currentConversationMessages" in js
+
+
+def test_app_js_guards_upload_and_mutations_during_retraining(client):
+    r = client.get("/static/app.js")
+    assert r.status_code == 200
+    js = r.text
+    assert "isRetraining" in js
+    assert "readOnlyMode || isRetraining" in js
+
+
+
+
+
+def test_app_js_resets_conversation_on_kb_change(client):
+    r = client.get("/static/app.js")
+    assert r.status_code == 200
+    js = r.text
+    assert "startNewChat()" in js
+    assert "previousKbId !== activeKbId" in js
+
+
+def test_app_js_resets_conversation_on_kb_creation_and_deletion_and_guards_orphan_kb(client):
+    r = client.get("/static/app.js")
+    assert r.status_code == 200
+    js = r.text
+    assert "ya no existe" in js

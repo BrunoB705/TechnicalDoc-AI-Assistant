@@ -44,6 +44,7 @@ def check_rate_limit(request: Request, service: RAGService = Depends(get_rag_ser
     responses={
         404: {"model": ErrorResponse},
         409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
         429: {"model": ErrorResponse},
         503: {"model": ErrorResponse},
     },
@@ -76,6 +77,7 @@ def query(req: QueryRequest, service: RAGService = Depends(get_rag_service)) -> 
     responses={
         404: {"model": ErrorResponse},
         409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
         429: {"model": ErrorResponse},
     },
 )
@@ -85,10 +87,12 @@ async def query_stream(
     service: RAGService = Depends(get_rag_service),
 ) -> StreamingResponse:
     """Endpoint de streaming por Server-Sent Events (SSE). Emite tokens a medida que se generan."""
-    # Validamos que la KB exista (404), la conversación exista (404) o que el índice esté
-    # disponible (409) antes de abrir SSE
-    service._resolve_kb(req.knowledge_base_id)
-    service._resolve_history(req.conversation_id)
+    # Validamos que la conversación pertenezca a la KB (422/404), la KB exista (404)
+    # o que el índice esté disponible (409) antes de abrir SSE
+    resolved_kb, _ = service._validate_and_resolve_conv_kb(
+        req.conversation_id, req.knowledge_base_id
+    )
+    service._resolve_kb(resolved_kb)
 
     async def event_generator():
         async for item in service.stream_answer(

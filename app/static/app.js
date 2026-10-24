@@ -13,6 +13,8 @@ let kbCatalog = [];
 let activeConversationId = null;
 let conversationsCatalog = [];
 let readOnlyMode = false;
+let isRetraining = false;
+let currentConversationMessages = [];
 let latestAnswer = "";
 let latestQuestion = "";
 
@@ -151,20 +153,36 @@ function cleanAnswerForDownload(text) {
     .trim();
 }
 
-function getDownloadFilename(question) {
+/** Formatea los mensajes de la conversación con prefijos USUARIO: y BOT: para exportar a .txt */
+function formatConversationForDownload(messages) {
+  if (!messages || !messages.length) return "";
+  return messages
+    .map((m) => {
+      if (m.role === "user") {
+        const userContent = (m.content || "").trim();
+        return userContent ? `USUARIO: ${userContent}` : "USUARIO:";
+      } else {
+        const botContent = cleanAnswerForDownload(m.content || "");
+        return botContent ? `BOT: ${botContent}` : "BOT:";
+      }
+    })
+    .join("\n\n");
+}
+
+function getDownloadFilename(titleOrQuestion) {
   const now = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
-  if (question) {
-    const slug = question
-      .slice(0, 25)
+  if (titleOrQuestion) {
+    const slug = titleOrQuestion
+      .slice(0, 30)
       .toLowerCase()
       .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
-    if (slug) return `respuesta-${slug}-${stamp}.txt`;
+    if (slug) return `conversacion-${slug}-${stamp}.txt`;
   }
-  return `respuesta-${stamp}.txt`;
+  return `conversacion-${stamp}.txt`;
 }
 
 function downloadTextFile(filename, content) {
@@ -179,6 +197,12 @@ function downloadTextFile(filename, content) {
   URL.revokeObjectURL(url);
 }
 
+if (typeof window !== "undefined") {
+  window.cleanAnswerForDownload = cleanAnswerForDownload;
+  window.formatConversationForDownload = formatConversationForDownload;
+  window.getDownloadFilename = getDownloadFilename;
+}
+
 // ---------- salud ----------
 async function checkHealth() {
   const badge = $("health");
@@ -189,9 +213,9 @@ async function checkHealth() {
     readOnlyMode = Boolean(body.read_only_mode);
     badge.className = `badge ${ok ? "badge-ok" : "badge-down"}`;
     badge.textContent = ok ? (readOnlyMode ? "online · solo lectura" : "online") : "error";
-    $("new-kb-btn").disabled = readOnlyMode;
-    $("upload-btn").disabled = readOnlyMode;
-    $("file").disabled = readOnlyMode;
+    $("new-kb-btn").disabled = readOnlyMode || isRetraining;
+    $("upload-btn").disabled = readOnlyMode || isRetraining;
+    $("file").disabled = readOnlyMode || isRetraining;
     const newChatBtn = $("new-chat-btn");
     if (newChatBtn) newChatBtn.disabled = readOnlyMode;
     document.querySelectorAll(".conv-del-btn").forEach((btn) => {
@@ -214,7 +238,7 @@ function updateKbBanner() {
   $("active-kb-name").textContent = current.name;
   $("active-kb-desc").textContent = current.description ? `— ${current.description}` : "";
   $("docs-kb-label").textContent = current.name;
-  $("del-kb-btn").disabled = readOnlyMode || activeKbId === "general";
+  $("del-kb-btn").disabled = readOnlyMode || activeKbId === "general" || isRetraining;
 }
 
 async function loadKbs(selectedId) {
@@ -242,11 +266,16 @@ async function loadKbs(selectedId) {
 }
 
 kbSelect?.addEventListener("change", () => {
+  if (isRetraining) return;
+  const previousKbId = activeKbId;
   activeKbId = kbSelect.value;
   setStatus("");
   $("retrain-container").hidden = true;
   updateKbBanner();
   loadDocs();
+  if (previousKbId !== activeKbId && activeConversationId) {
+    startNewChat();
+  }
 });
 
 $("open-docs-modal-btn")?.addEventListener("click", () => {
@@ -287,11 +316,12 @@ $("kb-form")?.addEventListener("submit", async (ev) => {
   $("kb-modal").close();
   await loadKbs(created.id);
   await loadDocs();
+  startNewChat();
   setStatus(`Base '${created.name}' creada.`, "ok");
 });
 
 $("del-kb-btn")?.addEventListener("click", async () => {
-  if (activeKbId === "general") return;
+  if (isRetraining || activeKbId === "general") return;
   const current = kbCatalog.find((k) => k.id === activeKbId);
   const label = current ? current.name : activeKbId;
   if (!confirm(`¿Eliminar la base "${label}" y todos sus documentos indexados?`)) return;
@@ -302,6 +332,7 @@ $("del-kb-btn")?.addEventListener("click", async () => {
     setStatus(`Base "${label}" eliminada.`, "ok");
     await loadKbs("general");
     await loadDocs();
+    startNewChat();
   } else {
     setStatus(await errorText(r), "err");
   }
@@ -348,6 +379,7 @@ async function loadConversations() {
 
 function startNewChat() {
   activeConversationId = null;
+  currentConversationMessages = [];
   renderConversationsList();
   messagesEl.replaceChildren(
     el("div", "empty", "Hacé una pregunta sobre los documentos de la base seleccionada.")
@@ -401,6 +433,10 @@ async function selectConversation(convId) {
     const r = await fetch(`/conversations/${encodeURIComponent(convId)}`);
     if (!r.ok) return;
     const detail = await r.json();
+    if (detail.last_kb_id && !kbCatalog.some((k) => k.id === detail.last_kb_id)) {
+      setStatus(`La base '${detail.last_kb_id}' de esta conversación ya no existe.`, "warn");
+      return;
+    }
     activeConversationId = detail.id;
     renderConversationsList();
 
@@ -412,6 +448,7 @@ async function selectConversation(convId) {
     }
 
     messagesEl.replaceChildren();
+    currentConversationMessages = [];
     latestAnswer = "";
     latestQuestion = "";
     let lastUserQuestion = "";
@@ -425,8 +462,11 @@ async function selectConversation(convId) {
         if (m.role === "user") {
           lastUserQuestion = m.content || "";
           addUserMessage(lastUserQuestion);
+          currentConversationMessages.push({ role: "user", content: lastUserQuestion });
         } else if (m.role === "assistant") {
           renderHistoricalBotMessage(m);
+          const botText = (m.content || m.message || "").trim();
+          currentConversationMessages.push({ role: "bot", content: botText });
           if (m.grounded && m.content) {
             latestAnswer = m.content.trim();
             latestQuestion = lastUserQuestion;
@@ -434,7 +474,7 @@ async function selectConversation(convId) {
         }
       }
     }
-    if (downloadBtn) downloadBtn.disabled = !latestAnswer;
+    if (downloadBtn) downloadBtn.disabled = currentConversationMessages.length === 0;
     scrollDown();
   } catch (e) {
     console.error("No se pudo cargar la conversación:", e);
@@ -529,6 +569,7 @@ async function ask(question, topK) {
     }
     bubble.classList.add("error");
     textEl.textContent = message;
+    currentConversationMessages.push({ role: "bot", content: message });
   };
 
   try {
@@ -583,14 +624,18 @@ async function ask(question, topK) {
           activeConversationId = data.conversation_id;
         }
         const finalText = typeof data.answer === "string" && data.answer ? data.answer : answer;
+        let botText = "";
         if (!data.grounded) {
           bubble.classList.add("warn");
-          textEl.textContent = data.message || "No se pudo verificar la respuesta con los documentos.";
+          botText = data.message || "No se pudo verificar la respuesta con los documentos.";
+          textEl.textContent = botText;
         } else {
-          renderWithCitations(textEl, finalText.trim(), msgId);
-          latestAnswer = finalText.trim();
+          botText = finalText.trim();
+          renderWithCitations(textEl, botText, msgId);
+          latestAnswer = botText;
           latestQuestion = question;
         }
+        currentConversationMessages.push({ role: "bot", content: botText });
         const cited = data.sources || [];
         if (cited.length) {
           const box = el("div", "sources");
@@ -610,7 +655,9 @@ async function ask(question, topK) {
         extra.appendChild(el("div", "meta", `${secs} s · KB: ${kbSnapshot}`));
       } else if (event === "error") {
         bubble.classList.add(data.reason ? "warn" : "error");
-        textEl.textContent = data.message || data.detail || "Error al procesar la consulta.";
+        const errMsg = data.message || data.detail || "Error al procesar la consulta.";
+        textEl.textContent = errMsg;
+        currentConversationMessages.push({ role: "bot", content: errMsg });
       }
     });
     if (!textEl.textContent) textEl.textContent = "La respuesta llegó vacía.";
@@ -630,17 +677,20 @@ form.addEventListener("submit", async (ev) => {
   askBtn.disabled = true;
   if (downloadBtn) downloadBtn.disabled = true;
   addUserMessage(question);
+  currentConversationMessages.push({ role: "user", content: question });
   await ask(question, Number.isInteger(k) ? k : null);
   askBtn.disabled = false;
-  if (downloadBtn && latestAnswer) downloadBtn.disabled = false;
+  if (downloadBtn) downloadBtn.disabled = currentConversationMessages.length === 0;
   questionEl.focus();
 });
 
 downloadBtn?.addEventListener("click", () => {
-  if (!latestAnswer) return;
-  const cleanText = cleanAnswerForDownload(latestAnswer);
-  const filename = getDownloadFilename(latestQuestion);
-  downloadTextFile(filename, cleanText);
+  if (!currentConversationMessages.length) return;
+  const conversationText = formatConversationForDownload(currentConversationMessages);
+  const conv = conversationsCatalog.find((c) => c.id === activeConversationId);
+  const title = conv?.title || currentConversationMessages.find((m) => m.role === "user")?.content || "";
+  const filename = getDownloadFilename(title);
+  downloadTextFile(filename, conversationText);
 });
 
 questionEl.addEventListener("keydown", (ev) => {
@@ -709,10 +759,20 @@ async function loadDocs() {
       const info = el("div");
       info.appendChild(el("div", "doc-name", d.source));
       const pages = d.pages ? ` · ${d.pages} pág.` : "";
-      info.appendChild(el("div", "doc-meta", `${d.file_type} · ${d.chunks} chunks${pages}`));
+      let dateMeta = "";
+      if (d.created_at) {
+        try {
+          const dt = new Date(d.created_at);
+          if (!isNaN(dt.getTime())) {
+            const pad = (n) => String(n).padStart(2, "0");
+            dateMeta = ` · ${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+          }
+        } catch { /* ignorar */ }
+      }
+      info.appendChild(el("div", "doc-meta", `${d.file_type} · ${d.chunks} chunks${pages}${dateMeta}`));
       const del = el("button", "danger", "Borrar");
       del.type = "button";
-      del.disabled = readOnlyMode;
+      del.disabled = readOnlyMode || isRetraining;
       del.addEventListener("click", () => deleteDoc(d));
       li.append(info, del);
       list.appendChild(li);
@@ -723,6 +783,7 @@ async function loadDocs() {
 }
 
 async function deleteDoc(d) {
+  if (isRetraining) return;
   if (!confirm(`¿Borrar "${d.source}" de la base "${activeKbId}"?`)) return;
   const url = `/knowledge-bases/${encodeURIComponent(activeKbId)}/documents/${encodeURIComponent(d.doc_id)}`;
   const r = await fetch(url, { method: "DELETE" });
@@ -828,12 +889,16 @@ function uploadWithRetrainingProgress(file, kbId) {
 
 $("upload-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  if (isRetraining) return;
   const fileInput = $("file");
   const file = fileInput.files[0];
   if (!file) return;
   const btn = $("upload-btn");
+  isRetraining = true;
   btn.disabled = true;
   fileInput.disabled = true;
+  $("del-kb-btn").disabled = true;
+  $("new-kb-btn").disabled = true;
   setStatus("");
   try {
     const d = await uploadWithRetrainingProgress(file, activeKbId);
@@ -849,8 +914,11 @@ $("upload-form").addEventListener("submit", async (ev) => {
   } catch (e) {
     setStatus(e.message, "err");
   } finally {
-    btn.disabled = false;
-    fileInput.disabled = false;
+    isRetraining = false;
+    btn.disabled = readOnlyMode;
+    fileInput.disabled = readOnlyMode;
+    $("new-kb-btn").disabled = readOnlyMode;
+    updateKbBanner();
     await loadKbs(activeKbId);
     await loadDocs();
   }

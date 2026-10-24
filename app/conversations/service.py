@@ -254,12 +254,18 @@ class ConversationService:
 
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, title FROM conversations WHERE id = ?",
+                "SELECT id, title, last_kb_id FROM conversations WHERE id = ?",
                 (conversation_id,),
             ).fetchone()
             if not row:
                 raise ConversationNotFoundError(
                     f"No existe la conversación '{conversation_id}'."
+                )
+
+            if row["last_kb_id"] != kb_id:
+                raise InvalidConversationError(
+                    f"La conversación '{conversation_id}' pertenece a la base "
+                    f"'{row['last_kb_id']}', no a '{kb_id}'."
                 )
 
             # Insertar mensaje de usuario
@@ -309,15 +315,18 @@ class ConversationService:
             conn.execute(
                 """
                 UPDATE conversations
-                SET title = ?, last_kb_id = ?, updated_at = ?
+                SET title = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (new_title, kb_id, now, conversation_id),
+                (new_title, now, conversation_id),
             )
             conn.commit()
 
     def get_recent_history(
-        self, conversation_id: str, max_exchanges: int | None = None
+        self,
+        conversation_id: str,
+        max_exchanges: int | None = None,
+        kb_id: str | None = None,
     ) -> list[tuple[str, str]]:
         with self._connect() as conn:
             row = conn.execute(
@@ -338,18 +347,25 @@ class ConversationService:
                 return []
 
             limit_messages = limit_exchanges * 2
+            where_clause = "WHERE conversation_id = ?"
+            params: list[str | int] = [conversation_id]
+            if kb_id is not None:
+                where_clause += " AND knowledge_base_id = ?"
+                params.append(kb_id)
+            params.append(limit_messages)
+
             msg_rows = conn.execute(
-                """
+                f"""
                 SELECT role, content FROM (
                     SELECT id, role, content
                     FROM messages
-                    WHERE conversation_id = ?
+                    {where_clause}
                     ORDER BY id DESC
                     LIMIT ?
                 )
                 ORDER BY id ASC
                 """,
-                (conversation_id, limit_messages),
+                params,
             ).fetchall()
 
         return [(r["role"], r["content"]) for r in msg_rows]

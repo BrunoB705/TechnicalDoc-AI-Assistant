@@ -1,4 +1,5 @@
 import hashlib
+from datetime import UTC, datetime
 from pathlib import Path
 
 from langchain_core.documents import Document
@@ -22,12 +23,24 @@ def load_file(
 
     raw = path.read_bytes()
     source = path.relative_to(root).as_posix() if root else path.name
+    mtime = 0.0
+    if path.exists():
+        try:
+            mtime = path.stat().st_mtime
+        except Exception:
+            mtime = 0.0
+    created_at = (
+        datetime.fromtimestamp(mtime, tz=UTC).isoformat()
+        if mtime > 0
+        else datetime.now(UTC).isoformat()
+    )
     base = {
         "source": source,
         "doc_id": _doc_id(raw),
         "file_type": ext.lstrip("."),
         "title": path.stem,
         "knowledge_base_id": knowledge_base_id,
+        "created_at": created_at,
     }
 
     if ext == ".pdf":

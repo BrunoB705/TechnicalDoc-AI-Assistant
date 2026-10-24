@@ -12,7 +12,7 @@ from langchain_core.language_models import BaseChatModel
 
 from app.config import Settings
 from app.conversations.service import ConversationService
-from app.exceptions import EmptyIndexError, LLMUnavailableError
+from app.exceptions import EmptyIndexError, InvalidConversationError, LLMUnavailableError
 from app.knowledge_bases.service import KnowledgeBaseService
 from app.rag.citations import extract_citations, strip_invalid_citations
 from app.rag.prompts import (
@@ -140,10 +140,38 @@ class RAGService:
             raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
         return str(msg.content).strip()
 
-    def _resolve_history(self, conversation_id: str | None) -> list[tuple[str, str]]:
+    def _validate_and_resolve_conv_kb(
+        self, conversation_id: str | None, requested_kb_id: str | None
+    ) -> tuple[str, list[tuple[str, str]]]:
+        """Valida que la conversación exista y que pertenezca a la base solicitada.
+
+        Si requested_kb_id es None pero conversation_id fue provisto, infiere la base asociada
+        a la conversación. Recupera el historial filtrado por esa base.
+        """
+        if not conversation_id or self.conversation_service is None:
+            return requested_kb_id or self.settings.default_kb_id, []
+
+        conv = self.conversation_service.get_conversation(conversation_id)
+        conv_kb = conv.last_kb_id or self.settings.default_kb_id
+
+        if requested_kb_id is not None and requested_kb_id != conv_kb:
+            raise InvalidConversationError(
+                f"La conversación '{conversation_id}' pertenece a la base '{conv_kb}', "
+                f"no a la base '{requested_kb_id}' solicitada."
+            )
+
+        resolved_kb = conv_kb
+        history = self.conversation_service.get_recent_history(
+            conversation_id, self.settings.conversation_window_exchanges, kb_id=resolved_kb
+        )
+        return resolved_kb, history
+
+    def _resolve_history(
+        self, conversation_id: str | None, kb_id: str | None = None
+    ) -> list[tuple[str, str]]:
         if conversation_id and self.conversation_service is not None:
             return self.conversation_service.get_recent_history(
-                conversation_id, self.settings.conversation_window_exchanges
+                conversation_id, self.settings.conversation_window_exchanges, kb_id=kb_id
             )
         return []
 
@@ -283,8 +311,10 @@ class RAGService:
         knowledge_base_id: str | None = None,
         conversation_id: str | None = None,
     ) -> QueryResult:
-        kb_id, kb_name, is_empty_kb = self._resolve_kb(knowledge_base_id)
-        history = self._resolve_history(conversation_id)
+        resolved_kb, history = self._validate_and_resolve_conv_kb(
+            conversation_id, knowledge_base_id
+        )
+        kb_id, kb_name, is_empty_kb = self._resolve_kb(resolved_kb)
         if is_empty_kb:
             msg = f"La base '{kb_name}' no contiene documentos cargados."
             self._log(question, 0, 0, 0, 0, "empty_knowledge_base", kb_id=kb_id)
@@ -378,8 +408,10 @@ class RAGService:
         message/answer/sources/cited_ids/conversation_id). `error` queda reservado a fallos
         reales (LLM caído).
         """
-        kb_id, kb_name, is_empty_kb = self._resolve_kb(knowledge_base_id)
-        history = self._resolve_history(conversation_id)
+        resolved_kb, history = self._validate_and_resolve_conv_kb(
+            conversation_id, knowledge_base_id
+        )
+        kb_id, kb_name, is_empty_kb = self._resolve_kb(resolved_kb)
         if is_empty_kb:
             msg = f"La base '{kb_name}' no contiene documentos cargados."
             self._log(question, 0, 0, 0, 0, "empty_knowledge_base", kb_id=kb_id)
