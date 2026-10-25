@@ -158,11 +158,21 @@ def evaluate_dataset(
                         generated_answer, case.expected_calculation
                     )
                 if case.forbidden_in_hints:
-                    hint_valid = check_hint_progression(
-                        generated_answer, case.forbidden_in_hints
-                    )
-                if case.pedagogical_mode == "check" and case.expected_answer:
-                    diag_terms = [t.strip() for t in case.expected_answer.split(",")]
+                    hint_valid = check_hint_progression(generated_answer, case.forbidden_in_hints)
+                if case.pedagogical_mode == "check":
+                    diag_terms = []
+                    if case.expected_calculation and "error_type" in case.expected_calculation:
+                        diag_terms.append(str(case.expected_calculation["error_type"]))
+                    if case.expected_answer:
+                        diag_terms.extend(
+                            [
+                                t.strip()
+                                for t in case.expected_answer.split(",")
+                                if len(t.strip()) < 35
+                            ]
+                        )
+                    if not diag_terms and case.expected_answer:
+                        diag_terms = [case.expected_answer]
                     diagnosis_correct = (not abstained) and check_student_error_diagnosis(
                         generated_answer, diag_terms
                     )

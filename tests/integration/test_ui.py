@@ -81,3 +81,11 @@ def test_app_js_resets_conversation_on_kb_creation_and_deletion_and_guards_orpha
     assert r.status_code == 200
     js = r.text
     assert "ya no existe" in js
+
+
+def test_app_js_normalizes_latex_math_delimiters(client):
+    r = client.get("/static/app.js")
+    assert r.status_code == 200
+    js = r.text
+    assert "normalizeMathDelimiters" in js
+    assert "window.normalizeMathDelimiters" in js

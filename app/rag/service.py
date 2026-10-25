@@ -162,6 +162,14 @@ class RAGService:
             logger.warning(json.dumps({"event": "step_back_error", "error": type(exc).__name__}))
             return question
 
+    @staticmethod
+    def _clean_for_number_search(text: str) -> str:
+        """Limpia menciones a estándares o tamaños de bits para no confundirlos con operandos."""
+        cleaned = re.sub(r"\bieee[- ]?754\b", " ", text, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\b(?:ca2|ca1|c2|c1)\b", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\b\d+\s*bits?\b", " ", cleaned, flags=re.IGNORECASE)
+        return cleaned
+
     def _detect_and_run_tools(self, question: str) -> tuple[str | None, dict[str, Any]]:
         """Detecta patrones computables comunes (IEEE 754, Ca2, bases, calculadora)
         y ejecuta herramientas deterministas de apoyo.
@@ -172,14 +180,24 @@ class RAGService:
 
         # 1. Detección de IEEE 754
         if any(w in low for w in ("ieee", "flotante", "precisión", "precision")):
-            m_num = re.search(r"(-?\d+(?:\.\d+)?)", question)
-            if m_num:
-                val = float(m_num.group(1))
-                fmt = "binary32"
-                if any(w in low for w in ("media", "16", "binary16", "half")):
-                    fmt = "binary16"
-                elif any(w in low for w in ("doble", "64", "binary64", "double")):
-                    fmt = "binary64"
+            fmt = "binary32"
+            if any(w in low for w in ("media", "16", "binary16", "half")):
+                fmt = "binary16"
+            elif any(w in low for w in ("doble", "64", "binary64", "double")):
+                fmt = "binary64"
+
+            val = None
+            if "\bnan\b" in low or "not a number" in low:
+                val = "nan"
+            elif any(inf_w in low for inf_w in ("\binf\b", "infinito", "infinity")):
+                val = "-inf" if any(neg in low for neg in ("-inf", "negativo", "menos")) else "inf"
+            else:
+                cleaned_q = self._clean_for_number_search(question)
+                m_num = re.search(r"(-?\d+(?:\.\d+)?)", cleaned_q)
+                if m_num:
+                    val = float(m_num.group(1))
+
+            if val is not None:
                 res = self.tool_registry.execute("ieee754", value=val, format_name=fmt)
                 if res.success:
                     hints.append(f"Cálculo IEEE 754 para {val} ({fmt}):\n{res.output}")
@@ -187,7 +205,8 @@ class RAGService:
 
         # 2. Detección de Complemento a Dos / Enteros
         if any(w in low for w in ("complemento", "ca2", "ca1", "signo y magnitud")):
-            m_num = re.search(r"(-?\d+)", question)
+            cleaned_q = self._clean_for_number_search(question)
+            m_num = re.search(r"(-?\d+)", cleaned_q)
             m_bits = re.search(r"(\d+)\s*bits?", low)
             bits = int(m_bits.group(1)) if m_bits else 8
             if m_num:
@@ -197,7 +216,33 @@ class RAGService:
                     hints.append(f"Representación entera para {val} ({bits} bits):\n{res.output}")
                     tool_data["integer_representation"] = res.data
 
-        # 3. Operaciones aritméticas / módulo
+        # 3. Conversión de bases
+        if any(
+            w in low
+            for w in (
+                "a binario",
+                "a hexadecimal",
+                "a octal",
+                "en binario",
+                "en hexadecimal",
+                "en octal",
+                "base 16",
+                "base 2",
+                "base 8",
+            )
+        ):
+            cleaned_q = self._clean_for_number_search(question)
+            m_num = re.search(r"(-?\d+)", cleaned_q)
+            m_bits = re.search(r"(\d+)\s*bits?", low)
+            bits = int(m_bits.group(1)) if m_bits else None
+            if m_num:
+                val = int(m_num.group(1))
+                res = self.tool_registry.execute("base_converter", value=val, bits=bits)
+                if res.success:
+                    hints.append(f"Conversión de base para {val}:\n{res.output}")
+                    tool_data["base_converter"] = res.data
+
+        # 4. Operaciones aritméticas / módulo
         if any(w in low for w in ("mod", "%", "módulo", "modulo", "resto")):
             m_mod = re.search(r"(\d+)\s*(?:mod|%|módulo|modulo)\s*(\d+)", low)
             if m_mod:
@@ -567,9 +612,7 @@ class RAGService:
             else self.settings.default_pedagogical_mode
         )
         resolved_strict = (
-            strict_mode
-            if strict_mode is not None
-            else self.settings.default_strict_mode
+            strict_mode if strict_mode is not None else self.settings.default_strict_mode
         )
 
         resolved_kb, history = self._validate_and_resolve_conv_kb(
@@ -709,9 +752,7 @@ class RAGService:
             else self.settings.default_pedagogical_mode
         )
         resolved_strict = (
-            strict_mode
-            if strict_mode is not None
-            else self.settings.default_strict_mode
+            strict_mode if strict_mode is not None else self.settings.default_strict_mode
         )
 
         resolved_kb, history = self._validate_and_resolve_conv_kb(

@@ -18,9 +18,7 @@ def parse_sse(text: str) -> list[tuple[str, dict]]:
     return events
 
 
-def test_query_api_accepts_pedagogical_mode_and_returns_metadata(
-    client, vectorstore, settings
-):
+def test_query_api_accepts_pedagogical_mode_and_returns_metadata(client, vectorstore, settings):
     fake_llm = FakeListChatModel(
         responses=["Resolución paso a paso [1]: S=0, E=10000110, M=00010010000000000000000."]
     )
@@ -52,12 +50,8 @@ def test_query_api_validates_pedagogical_mode(client):
     assert res.status_code == 422
 
 
-def test_query_stream_api_propagates_professor_metadata_in_end_event(
-    client, vectorstore, settings
-):
-    fake_llm = FakeListChatModel(
-        responses=["Pista conceptual [1]: Primero pasá 137 a binario."]
-    )
+def test_query_stream_api_propagates_professor_metadata_in_end_event(client, vectorstore, settings):
+    fake_llm = FakeListChatModel(responses=["Pista conceptual [1]: Primero pasá 137 a binario."])
     use_llm(client, vectorstore, settings, fake_llm)
 
     payload = {

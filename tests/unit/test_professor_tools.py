@@ -1,4 +1,3 @@
-
 from app.rag.tools.calculator import SafeCalculatorTool
 from app.rag.tools.domain.architecture.bases import BaseConverterTool
 from app.rag.tools.domain.architecture.ieee754 import IEEE754Tool
@@ -154,3 +153,58 @@ def test_tool_registry():
 
     unknown = reg.execute("non_existent_tool")
     assert unknown.success is False
+
+
+def test_calculator_pow_large_exponent_rejected():
+    calc = SafeCalculatorTool()
+    res = calc.run("pow(2, 500000)")
+    assert res.success is False
+    assert "demasiado grandes" in res.error
+
+    res_op = calc.run("2 ** 500000")
+    assert res_op.success is False
+    assert "demasiado grandes" in res_op.error
+
+
+def test_calculator_complex_result_rejected():
+    calc = SafeCalculatorTool()
+    res = calc.run("(-4) ** 0.5")
+    assert res.success is False
+    assert "complejo" in res.error.lower()
+
+
+def test_ieee754_special_values_nan_inf():
+    tool = IEEE754Tool()
+    res_nan = tool.run("nan", format_name="binary32")
+    assert res_nan.success is True
+    assert res_nan.data["exponent_bin"] == "11111111"
+    assert res_nan.data["fraction_bin"].startswith("1")
+    assert res_nan.data["hex"] == "0x7FC00000"
+
+    res_inf = tool.run("inf", format_name="binary32")
+    assert res_inf.success is True
+    assert res_inf.data["sign"] == "0"
+    assert res_inf.data["exponent_bin"] == "11111111"
+    assert res_inf.data["fraction_bin"] == "0" * 23
+    assert res_inf.data["hex"] == "0x7F800000"
+
+    res_ninf = tool.run("-inf", format_name="binary32")
+    assert res_ninf.success is True
+    assert res_ninf.data["sign"] == "1"
+    assert res_ninf.data["hex"] == "0xFF800000"
+
+
+def test_ieee754_small_float_no_collapse():
+    tool = IEEE754Tool()
+    res = tool.run(1e-15, format_name="binary32")
+    assert res.success is True
+    # 1e-15 nunca debe colapsar a exponente 126 (0.5)
+    assert res.data["biased_exponent"] < 120
+    assert res.data["hex"] == "0x26901D7C"
+
+
+def test_ieee754_invalid_value():
+    tool = IEEE754Tool()
+    res = tool.run("invalido", format_name="binary32")
+    assert res.success is False
+    assert "no válido" in res.error

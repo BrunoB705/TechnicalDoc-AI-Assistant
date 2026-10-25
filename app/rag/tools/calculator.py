@@ -16,10 +16,21 @@ _SAFE_OPERATORS = {
     ast.UAdd: operator.pos,
 }
 
+
+def _safe_pow(base: float | int, exp: float | int) -> float | int:
+    """Función de exponenciación protegida contra DoS por superpotencias y resultados complejos."""
+    if abs(exp) > 1000 or abs(base) > 1e10:
+        raise ValueError("Exponente o base demasiado grandes para cálculo seguro.")
+    res = pow(base, exp)
+    if isinstance(res, complex):
+        raise ValueError("Resultado complejo no soportado en calculadora real.")
+    return res
+
+
 _SAFE_FUNCTIONS = {
     "abs": abs,
     "round": round,
-    "pow": pow,
+    "pow": _safe_pow,
     "min": min,
     "max": max,
 }
@@ -57,14 +68,20 @@ class SafeCalculatorTool(BaseTool):
                     raise ValueError("Exponente o base demasiado grandes para cálculo seguro.")
             if op_type in (ast.Div, ast.FloorDiv, ast.Mod) and right == 0:
                 raise ZeroDivisionError("División por cero.")
-            return _SAFE_OPERATORS[op_type](left, right)
+            res = _SAFE_OPERATORS[op_type](left, right)
+            if isinstance(res, complex):
+                raise ValueError("Resultado complejo no soportado en calculadora real.")
+            return res
 
         if isinstance(node, ast.UnaryOp):
             operand = self._eval_node(node.operand)
             op_type = type(node.op)
             if op_type not in _SAFE_OPERATORS:
                 raise ValueError(f"Operador unario no permitido: {op_type.__name__}")
-            return _SAFE_OPERATORS[op_type](operand)
+            res = _SAFE_OPERATORS[op_type](operand)
+            if isinstance(res, complex):
+                raise ValueError("Resultado complejo no soportado en calculadora real.")
+            return res
 
         if isinstance(node, ast.Call):
             if not isinstance(node.func, ast.Name):
@@ -80,9 +97,7 @@ class SafeCalculatorTool(BaseTool):
     def run(self, expression: str, **kwargs: Any) -> ToolResult:
         clean = expression.strip()
         if not clean:
-            return ToolResult(
-                success=False, output="", error="La expresión aritmética está vacía."
-            )
+            return ToolResult(success=False, output="", error="La expresión aritmética está vacía.")
         if len(clean) > 300:
             return ToolResult(
                 success=False, output="", error="La expresión supera el límite de 300 caracteres."
@@ -91,6 +106,8 @@ class SafeCalculatorTool(BaseTool):
         try:
             parsed = ast.parse(clean, mode="eval")
             result = self._eval_node(parsed.body)
+            if isinstance(result, complex):
+                raise ValueError("Resultado complejo no soportado en calculadora real.")
             # Redondear si es flotante con muchos decimales espurios
             if isinstance(result, float) and result.is_integer():
                 result = int(result)

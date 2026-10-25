@@ -116,11 +116,25 @@ function renderWithCitationsFallback(container, text, msgId) {
   }
 }
 
+/** Normaliza delimitadores LaTeX \[...\] y \(...\) a $$...$$ y $...$ para que marked-katex los renderice. */
+function normalizeMathDelimiters(text) {
+  if (!text) return "";
+  const codeBlockRegex = /(```[\s\S]*?```|`[^`\n]+`)/g;
+  const parts = text.split(codeBlockRegex);
+  for (let i = 0; i < parts.length; i += 2) {
+    parts[i] = parts[i]
+      .replace(/\\\[([\s\S]*?)\\\]/g, (match, formula) => `$$${formula.trim()}$$`)
+      .replace(/\\\(([\s\S]*?)\\\)/g, (match, formula) => `$${formula.trim()}$`);
+  }
+  return parts.join("");
+}
+
 /** Renderiza Markdown y KaTeX convirtiendo [n] en chips interactivos. */
 function renderWithCitations(container, text, msgId) {
   if (typeof marked !== "undefined" && typeof DOMPurify !== "undefined") {
     try {
-      const rawHtml = marked.parse(text);
+      const normalizedText = normalizeMathDelimiters(text);
+      const rawHtml = marked.parse(normalizedText);
       container.innerHTML = DOMPurify.sanitize(rawHtml);
       transformCitationsInDom(container, msgId);
       container.className = "msg-text markdown-body";
@@ -203,6 +217,7 @@ if (typeof window !== "undefined") {
   window.cleanAnswerForDownload = cleanAnswerForDownload;
   window.formatConversationForDownload = formatConversationForDownload;
   window.getDownloadFilename = getDownloadFilename;
+  window.normalizeMathDelimiters = normalizeMathDelimiters;
 }
 
 // ---------- salud ----------
@@ -957,8 +972,12 @@ questionEl.focus();
 // Controles del Modo Pedagógico y Modo Estricto
 document.querySelectorAll(".mode-chip").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".mode-chip").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".mode-chip").forEach((b) => {
+      b.classList.remove("active");
+      b.setAttribute("aria-checked", "false");
+    });
     btn.classList.add("active");
+    btn.setAttribute("aria-checked", "true");
     selectedPedagogicalMode = btn.dataset.mode || "auto";
   });
 });

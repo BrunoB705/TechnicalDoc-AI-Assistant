@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TechnicalDoc AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=7">
+  <link rel="stylesheet" href="/static/style.css?v=8">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 </head>
 <body>
@@ -39,11 +39,11 @@
       </div>
       <div class="professor-toolbar">
         <div class="mode-chips" role="radiogroup" aria-label="Modo del profesor">
-          <button type="button" class="mode-chip active" data-mode="auto" title="Detección automática del objetivo pedagógico">✨ Auto</button>
-          <button type="button" class="mode-chip" data-mode="explain" title="Explicación conceptual y fundamentos">📖 Explicar</button>
-          <button type="button" class="mode-chip" data-mode="solve" title="Resolución guiada paso a paso">🧮 Resolver</button>
-          <button type="button" class="mode-chip" data-mode="hint" title="Pista progresiva sin revelar la respuesta completa">💡 Pistas</button>
-          <button type="button" class="mode-chip" data-mode="check" title="Diagnóstico de errores en tu resolución">✏️ Corregir</button>
+          <button type="button" class="mode-chip active" role="radio" aria-checked="true" data-mode="auto" title="Detección automática del objetivo pedagógico">✨ Auto</button>
+          <button type="button" class="mode-chip" role="radio" aria-checked="false" data-mode="explain" title="Explicación conceptual y fundamentos">📖 Explicar</button>
+          <button type="button" class="mode-chip" role="radio" aria-checked="false" data-mode="solve" title="Resolución guiada paso a paso">🧮 Resolver</button>
+          <button type="button" class="mode-chip" role="radio" aria-checked="false" data-mode="hint" title="Pista progresiva sin revelar la respuesta completa">💡 Pistas</button>
+          <button type="button" class="mode-chip" role="radio" aria-checked="false" data-mode="check" title="Diagnóstico de errores en tu resolución">✏️ Corregir</button>
         </div>
         <label class="strict-toggle" title="Modo estricto: responder únicamente con premisas explícitas de la base de conocimiento">
           <input type="checkbox" id="strict-mode-toggle">
@@ -122,6 +122,6 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked-katex-extension/lib/index.umd.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
-  <script src="/static/app.js?v=8"></script>
+  <script src="/static/app.js?v=9"></script>
 </body>
 </html>

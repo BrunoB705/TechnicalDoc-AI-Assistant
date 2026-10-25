@@ -87,9 +87,7 @@ def test_answer_check_mode_diagnosis():
 @pytest.mark.anyio
 async def test_stream_answer_emits_professor_metadata_in_end_event():
     rag = _build_rag(
-        responses=[
-            "Desarrollo paso a paso [1]: S=0, E=10000110, M=00010010000000000000000."
-        ]
+        responses=["Desarrollo paso a paso [1]: S=0, E=10000110, M=00010010000000000000000."]
     )
     events = []
     async for event in rag.stream_answer(
@@ -107,3 +105,32 @@ async def test_stream_answer_emits_professor_metadata_in_end_event():
     assert end_data["strict_mode"] is False
     assert "verification_data" in end_data
     assert "ieee754" in end_data["verification_data"]
+
+
+def test_detect_and_run_tools_sanitizes_ieee754_question():
+    rag = _build_rag(responses=["ok"])
+    hint, data = rag._detect_and_run_tools("En IEEE 754 de 32 bits representa el 42")
+    assert data is not None
+    assert "ieee754" in data
+    # Debe haber calculado para 42, no para 754
+    assert data["ieee754"]["value"] == 42.0
+    assert data["ieee754"]["hex"] == "0x42280000"
+
+
+def test_detect_and_run_tools_sanitizes_ca2_question():
+    rag = _build_rag(responses=["ok"])
+    hint, data = rag._detect_and_run_tools("En Ca2 de 8 bits representa el número -5")
+    assert data is not None
+    assert "integer_representation" in data
+    # Debe haber calculado para -5, no para 2
+    assert data["integer_representation"]["value"] == -5
+    assert data["integer_representation"]["twos_complement"] == "11111011"
+
+
+def test_detect_and_run_tools_runs_base_converter():
+    rag = _build_rag(responses=["ok"])
+    hint, data = rag._detect_and_run_tools("Convierte el número 255 a binario en 8 bits")
+    assert data is not None
+    assert "base_converter" in data
+    assert data["base_converter"]["decimal"] == 255
+    assert data["base_converter"]["binary"] == "11111111"

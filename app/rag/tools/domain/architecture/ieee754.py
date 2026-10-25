@@ -39,29 +39,9 @@ class IEEE754Tool(BaseTool):
     )
     domain = "architecture"
 
-    @staticmethod
-    def _float_to_binary_str(val: float, max_frac_bits: int = 60) -> tuple[str, str]:
-        """Convierte la parte entera y fraccionaria de un número a binario."""
-        int_part = int(math.floor(val))
-        frac_part = val - int_part
-
-        int_bin = bin(int_part)[2:] if int_part > 0 else "0"
-        frac_bits = []
-        curr = frac_part
-        for _ in range(max_frac_bits):
-            if curr == 0:
-                break
-            curr *= 2
-            bit = int(curr)
-            frac_bits.append(str(bit))
-            curr -= bit
-
-        frac_bin = "".join(frac_bits) if frac_bits else "0"
-        return int_bin, frac_bin
-
     def run(
         self,
-        value: float | int,
+        value: float | int | str,
         format_name: str = "binary32",
         exp_bits: int | None = None,
         bias: int | None = None,
@@ -91,18 +71,84 @@ class IEEE754Tool(BaseTool):
             )
 
         total_bits = 1 + e_bits + f_bits
-        val_float = float(value)
+        hex_len = (total_bits + 3) // 4
+
+        try:
+            val_float = float(value)
+        except (ValueError, TypeError):
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"Valor numérico no válido para IEEE 754: '{value}'",
+            )
 
         # 1. Signo
         sign = 1 if math.copysign(1.0, val_float) < 0 else 0
         sign_bin = str(sign)
 
-        # 2. Manejo de cero
+        # 2. Casos especiales: NaN
+        if math.isnan(val_float):
+            exp_bin = "1" * e_bits
+            frac_bin = "1" + "0" * (f_bits - 1)  # Quiet NaN canónico
+            full_bin = f"{sign_bin} {exp_bin} {frac_bin}"
+            full_hex = hex(int(full_bin.replace(" ", ""), 2))[2:].upper().zfill(hex_len)
+            return ToolResult(
+                success=True,
+                output=(
+                    f"Formato: IEEE 754 {fmt_desc}\n"
+                    f"Valor: NaN (Not a Number)\n"
+                    f"- Signo: {sign_bin}\n"
+                    f"- Exponente: {exp_bin} (todos 1)\n"
+                    f"- Mantisa: {frac_bin} (distinta de cero)\n"
+                    f"- Binario final: {full_bin}\n"
+                    f"- Hexadecimal: 0x{full_hex}"
+                ),
+                data={
+                    "format": fmt_desc,
+                    "value": "NaN",
+                    "sign": sign_bin,
+                    "exponent_bin": exp_bin,
+                    "fraction_bin": frac_bin,
+                    "full_bin": full_bin,
+                    "hex": f"0x{full_hex}",
+                },
+            )
+
+        # 3. Casos especiales: Infinito (+Inf, -Inf)
+        if math.isinf(val_float):
+            exp_bin = "1" * e_bits
+            frac_bin = "0" * f_bits
+            full_bin = f"{sign_bin} {exp_bin} {frac_bin}"
+            full_hex = hex(int(full_bin.replace(" ", ""), 2))[2:].upper().zfill(hex_len)
+            inf_label = "-Infinito" if sign else "+Infinito"
+            return ToolResult(
+                success=True,
+                output=(
+                    f"Formato: IEEE 754 {fmt_desc}\n"
+                    f"Valor: {inf_label}\n"
+                    f"- Signo: {sign_bin}\n"
+                    f"- Exponente: {exp_bin} (todos 1)\n"
+                    f"- Mantisa: {frac_bin} (todos 0)\n"
+                    f"- Binario final: {full_bin}\n"
+                    f"- Hexadecimal: 0x{full_hex}"
+                ),
+                data={
+                    "format": fmt_desc,
+                    "value": inf_label,
+                    "sign": sign_bin,
+                    "exponent_bin": exp_bin,
+                    "fraction_bin": frac_bin,
+                    "full_bin": full_bin,
+                    "hex": f"0x{full_hex}",
+                },
+            )
+
+        # 4. Caso cero (+0.0, -0.0)
         if val_float == 0.0:
             exp_bin = "0" * e_bits
             frac_bin = "0" * f_bits
             full_bin = f"{sign_bin} {exp_bin} {frac_bin}"
-            full_hex = hex(int(full_bin.replace(" ", ""), 2))[2:].upper().zfill(total_bits // 4)
+            full_hex = hex(int(full_bin.replace(" ", ""), 2))[2:].upper().zfill(hex_len)
             return ToolResult(
                 success=True,
                 output=(
@@ -129,24 +175,9 @@ class IEEE754Tool(BaseTool):
 
         abs_val = abs(val_float)
 
-        # 3. Descomposición binaria y normalización
-        int_bin, frac_raw = self._float_to_binary_str(abs_val, max_frac_bits=f_bits + 20)
-
-        if abs_val >= 1.0:
-            true_exp = len(int_bin) - 1
-            # Bits del entero después del primer 1, seguidos de la parte fraccionaria
-            combined_frac = (int_bin[1:] + frac_raw).ljust(f_bits, "0")[:f_bits]
-            norm_str = f"1.{combined_frac} * 2^{true_exp}"
-        else:
-            # Encontrar el primer 1 en la parte fraccionaria
-            first_one_idx = frac_raw.find("1")
-            if first_one_idx == -1:
-                first_one_idx = 0
-            true_exp = -(first_one_idx + 1)
-            combined_frac = frac_raw[first_one_idx + 1 :].ljust(f_bits, "0")[:f_bits]
-            norm_str = f"1.{combined_frac} * 2^{true_exp}"
-
-        # 4. Exponente sesgado
+        # 5. Descomposición con math.frexp para evitar underflow artificial
+        m, e = math.frexp(abs_val)
+        true_exp = e - 1
         biased_exp = true_exp + b_val
         max_exp = (1 << e_bits) - 1
 
@@ -156,15 +187,35 @@ class IEEE754Tool(BaseTool):
             combined_frac = "0" * f_bits
             norm_str = "Infinito (overflow de exponente)"
         elif biased_exp <= 0:
-            # Subnormal o underflow
+            # Número subnormal
             biased_exp = 0
             exp_bin = "0" * e_bits
+            # En subnormales: val = 0.F * 2^(1 - bias)
+            curr = abs_val * (2.0 ** (b_val - 1))
+            frac_bits_list = []
+            for _ in range(f_bits):
+                curr *= 2.0
+                bit = int(curr)
+                frac_bits_list.append(str(min(bit, 1)))
+                curr -= bit
+            combined_frac = "".join(frac_bits_list)
+            norm_str = f"0.{combined_frac} * 2^{1 - b_val} (Subnormal)"
         else:
+            # Número normalizado
             exp_bin = bin(biased_exp)[2:].zfill(e_bits)
+            frac_part = 2.0 * m - 1.0  # mantisa fraccionaria sin el bit implícito 1
+            frac_bits_list = []
+            curr = frac_part
+            for _ in range(f_bits):
+                curr *= 2.0
+                bit = int(curr)
+                frac_bits_list.append(str(min(bit, 1)))
+                curr -= bit
+            combined_frac = "".join(frac_bits_list)
+            norm_str = f"1.{combined_frac} * 2^{true_exp}"
 
         full_raw_bin = f"{sign_bin}{exp_bin}{combined_frac}"
         full_bin = f"{sign_bin} {exp_bin} {combined_frac}"
-        hex_len = (total_bits + 3) // 4
         full_hex = hex(int(full_raw_bin, 2))[2:].upper().zfill(hex_len)
 
         steps = [
