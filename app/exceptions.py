@@ -52,3 +52,11 @@ class ReadOnlyModeError(RAGError):
 
 class RateLimitExceededError(RAGError):
     """Se superó el límite de consultas por minuto permitido."""
+
+
+class LearningSessionNotFoundError(RAGError):
+    """La sesión de aprendizaje solicitada no existe."""
+
+
+class InvalidLearningActionError(RAGError):
+    """La acción solicitada no es válida para el estado actual de la sesión."""

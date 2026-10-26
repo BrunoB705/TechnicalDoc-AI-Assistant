@@ -2,6 +2,7 @@
 
 const $ = (id) => document.getElementById(id);
 const messagesEl = $("messages");
+const learningPanelEl = $("learning-panel");
 const form = $("ask-form");
 const questionEl = $("question");
 const askBtn = $("ask-btn");
@@ -19,6 +20,7 @@ let latestAnswer = "";
 let latestQuestion = "";
 let selectedPedagogicalMode = "auto";
 let isStrictMode = false;
+let currentLearningSession = null;
 
 // Configuración de Markdown (Marked) y fórmulas (KaTeX)
 if (typeof marked !== "undefined") {
@@ -404,11 +406,14 @@ function startNewChat() {
   messagesEl.firstElementChild.id = "empty-hint";
   latestAnswer = "";
   latestQuestion = "";
+  currentLearningSession = null;
+  renderLearningSession(null);
+  syncLearningComposer();
   if (downloadBtn) downloadBtn.disabled = true;
   questionEl.focus();
 }
 
-function renderHistoricalBotMessage(m) {
+function renderHistoricalBotMessage(m, target = messagesEl) {
   $("empty-hint")?.remove();
   const msgId = `m${++counter}`;
   const bubble = el("div", "msg bot");
@@ -449,7 +454,7 @@ function renderHistoricalBotMessage(m) {
     metaInfo += ` · 🔒 Estricto`;
   }
   extra.appendChild(el("div", "meta", metaInfo));
-  messagesEl.appendChild(bubble);
+  target.appendChild(bubble);
 }
 
 async function selectConversation(convId) {
@@ -462,6 +467,12 @@ async function selectConversation(convId) {
       return;
     }
     activeConversationId = detail.id;
+    currentLearningSession = null;
+    try {
+      const learningResponse = await fetch(`/learning-sessions/by-conversation/${encodeURIComponent(convId)}`);
+      if (learningResponse.ok) currentLearningSession = await learningResponse.json();
+    } catch { /* una conversación sin sesión de Aprender sigue siendo normal */ }
+    if (currentLearningSession) setPedagogicalMode("learn");
     renderConversationsList();
 
     if (detail.last_kb_id && kbCatalog.some((k) => k.id === detail.last_kb_id)) {
@@ -477,6 +488,14 @@ async function selectConversation(convId) {
     latestQuestion = "";
     let lastUserQuestion = "";
     const msgs = detail.messages || [];
+    let historyTarget = messagesEl;
+    if (currentLearningSession && msgs.length) {
+      const history = el("details", "learning-history");
+      history.appendChild(el("summary", null, `Historial de la tutoría · ${msgs.length} intervenciones`));
+      historyTarget = el("div", "learning-history-content");
+      history.appendChild(historyTarget);
+      messagesEl.appendChild(history);
+    }
     if (!msgs.length) {
       const empty = el("div", "empty", "Hacé una pregunta sobre los documentos de la base seleccionada.");
       empty.id = "empty-hint";
@@ -485,10 +504,10 @@ async function selectConversation(convId) {
       for (const m of msgs) {
         if (m.role === "user") {
           lastUserQuestion = m.content || "";
-          addUserMessage(lastUserQuestion);
+          addUserMessage(lastUserQuestion, historyTarget);
           currentConversationMessages.push({ role: "user", content: lastUserQuestion });
         } else if (m.role === "assistant") {
-          renderHistoricalBotMessage(m);
+          renderHistoricalBotMessage(m, historyTarget);
           const botText = (m.content || m.message || "").trim();
           currentConversationMessages.push({ role: "bot", content: botText });
           if (m.grounded && m.content) {
@@ -499,6 +518,8 @@ async function selectConversation(convId) {
       }
     }
     if (downloadBtn) downloadBtn.disabled = currentConversationMessages.length === 0;
+    renderLearningSession(currentLearningSession);
+    syncLearningComposer();
     scrollDown();
   } catch (e) {
     console.error("No se pudo cargar la conversación:", e);
@@ -528,9 +549,244 @@ $("new-chat-btn")?.addEventListener("click", () => startNewChat());
 // ---------- chat (SSE por fetch) ----------
 let counter = 0;
 
-function addUserMessage(text) {
+function renderLearningSession(session) {
+  const panel = learningPanelEl;
+  if (!panel) return;
+  messagesEl.appendChild(panel);
+  panel.replaceChildren();
+  if (selectedPedagogicalMode !== "learn") {
+    panel.hidden = true;
+    if (!currentConversationMessages.length && !$("empty-hint")) {
+      const empty = el("div", "empty", "Hacé una pregunta sobre los documentos de la base seleccionada.");
+      empty.id = "empty-hint";
+      messagesEl.insertBefore(empty, panel);
+    }
+    return;
+  }
+  panel.hidden = false;
+  if (!session) {
+    $("empty-hint")?.remove();
+    panel.append(
+      el("div", "learning-welcome-icon", "✦"),
+      el("span", "learning-eyebrow", "APRENDÉ PASO A PASO"),
+      el("h2", "learning-welcome-title", "¿Qué querés aprender hoy?"),
+      el("p", "learning-welcome-copy", "Contame el tema y preparo una ruta guiada con explicaciones, ejercicios y material de tu base de conocimiento."),
+      el("div", "learning-welcome-note", `Base de conocimiento: ${$("active-kb-name")?.textContent || "General"}`),
+    );
+    return;
+  }
+  const heading = el("div", "learning-heading");
+  const nodeCount = session.nodes?.length || 0;
+  const citationPrefix = `learning-${session.id}`;
+  const richText = (text, className) => {
+    const element = el("div", className);
+    renderWithCitations(element, text, citationPrefix);
+    className.split(/\s+/).filter(Boolean).forEach((name) => element.classList.add(name));
+    return element;
+  };
+  const identity = el("div", "learning-identity");
+  const displayGoal = session.plan?.goal || (session.goal || "").split("\nAjuste solicitado:")[0].trim() || "Sesión de aprendizaje";
+  identity.append(el("span", "learning-eyebrow", "TU RUTA DE APRENDIZAJE"), el("h3", null, displayGoal));
+  heading.appendChild(identity);
+  heading.appendChild(el("span", `learning-state state-${session.state}`, session.state.replaceAll("_", " ")));
+  panel.appendChild(heading);
+  if (nodeCount) {
+    const progressRow = el("div", "learning-progress-row");
+    const masteredCount = session.nodes.filter((node) => node.status === "mastered").length;
+    const visibleProgress = session.state === "completed" ? nodeCount : masteredCount;
+    progressRow.append(el("span", null, "Progreso"), el("span", "learning-progress-label", `${visibleProgress} de ${nodeCount} conceptos`));
+    panel.append(progressRow);
+    const track = el("div", "learning-progress-track");
+    const fill = el("div", "learning-progress-fill");
+    const completed = session.state === "completed"
+      ? nodeCount
+      : session.nodes.filter((node) => node.status === "mastered").length;
+    fill.style.width = `${Math.round((completed / nodeCount) * 100)}%`;
+    track.appendChild(fill);
+    panel.appendChild(track);
+  }
+  if (session.state === "completed" || session.state === "review") {
+    const score = session.score == null ? "" : ` · resultado ${Math.round(session.score * 100)}%`;
+    const mastered = session.nodes.filter((node) => node.status === "mastered");
+    const pending = session.nodes.filter((node) => node.status !== "mastered");
+    panel.appendChild(el("p", "learning-summary", `Conceptos sólidos: ${mastered.map((node) => node.title).join(", ") || "ninguno todavía"}${score}`));
+    if (pending.length) panel.appendChild(el("p", "learning-summary", `Para repasar: ${pending.map((node) => node.title).join(", ")}`));
+  }
+  if (session.content) panel.appendChild(richText(session.content, "learning-content"));
+  if (session.plan?.approach && session.state === "plan_pending") panel.appendChild(el("p", "learning-approach", session.plan.approach));
+  if (session.nodes?.length) {
+    const planDetails = el("details", "learning-plan-details");
+    planDetails.open = session.state === "plan_pending";
+    planDetails.appendChild(el("summary", null, session.state === "plan_pending" ? "Ver el recorrido propuesto" : "Ver recorrido y conceptos"));
+    const list = el("ol", "learning-map");
+    for (const node of session.nodes) {
+      const prereqs = node.prerequisites?.length ? ` (depende de ${node.prerequisites.join(", ")})` : "";
+      const item = el("li", `learning-node ${node.status}${node.id === session.current_node_id || (node.id == null && session.nodes.indexOf(node) === session.current_node_index) ? " current" : ""}`);
+      item.append(el("span", "learning-node-title", node.title), el("span", "learning-node-status", node.status.replaceAll("_", " ")));
+      if (prereqs) item.appendChild(el("span", "learning-node-prereqs", prereqs));
+      list.appendChild(item);
+    }
+    planDetails.appendChild(list);
+    if (typeof mermaid !== "undefined" && session.plan?.nodes?.length) {
+      const graph = el("div", "learning-map mermaid");
+      graph.textContent = `graph TD\n${session.plan.nodes.map((n) => `${n.id}["${String(n.title).replace(/[\[\]"\n]/g, "")}"]`).join("\n")}\n${session.plan.nodes.flatMap((n) => (n.prerequisites || []).map((p) => `${p} --> ${n.id}`)).join("\n")}`;
+      planDetails.appendChild(graph);
+      try { mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "dark" }); mermaid.run({ nodes: [graph] }); } catch { /* la lista textual conserva el mapa */ }
+    }
+    panel.appendChild(planDetails);
+  }
+  if (session.feedback?.message) panel.appendChild(richText(session.feedback.message, `learning-feedback ${session.feedback.correct ? "correct" : "review"}`));
+  if (session.quiz) {
+    panel.appendChild(el("div", "learning-section-label", session.quiz.kind === "diagnostic" ? "PUNTO DE PARTIDA" : "COMPROBÁ LO QUE ENTENDISTE"));
+    const quiz = el("fieldset", "learning-quiz");
+    quiz.appendChild(el("legend", null, session.quiz.question));
+    for (const option of session.quiz.options || []) {
+      const label = el("label", "learning-option");
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "learning-answer";
+      input.value = option.id;
+      const optionText = el("span", "learning-option-text");
+      renderWithCitations(optionText, `${option.id}. ${option.text}`, citationPrefix);
+      optionText.classList.add("learning-option-text");
+      label.append(input, optionText);
+      quiz.appendChild(label);
+    }
+    panel.appendChild(quiz);
+    const submit = el("button", null, "Responder");
+    submit.type = "button";
+    submit.addEventListener("click", () => {
+      const selected = panel.querySelector('input[name="learning-answer"]:checked');
+      if (!selected) return setStatus("Elegí una opción para responder.", "warn");
+      sendLearningAction(
+        session.quiz.kind === "diagnostic" ? "answer_diagnostic" : "answer_quiz",
+        selected.value,
+        submit,
+      );
+    });
+    panel.appendChild(submit);
+  }
+  const actions = el("div", "learning-actions");
+  const addAction = (action, label) => {
+    const button = el("button", "secondary", label);
+    button.type = "button";
+    button.addEventListener("click", () => sendLearningAction(action, undefined, button));
+    actions.appendChild(button);
+  };
+  if (session.state === "plan_pending") addAction("approve_plan", "Aprobar plan");
+  if (session.state === "awaiting_web_consent") {
+    addAction("approve_web", "Autorizar búsqueda web");
+    addAction("decline_web", "Seguir sin web");
+  }
+  if (session.state === "awaiting_advance") addAction("advance", "Siguiente concepto");
+  if (session.state === "review") addAction("advance", "Repasar conceptos débiles");
+  if (["teaching", "checking"].includes(session.state)) {
+    addAction("hint", "Pedir una pista");
+    addAction("solve", "Ver resolución guiada");
+  }
+  if (session.state === "paused") addAction("resume", "Retomar sesión");
+  else if (!["completed", "blocked"].includes(session.state)) addAction("pause", "Pausar sesión");
+  if (actions.childNodes.length) panel.appendChild(actions);
+  for (const source of session.sources || []) {
+    let details = panel.querySelector(".learning-sources");
+    if (!details) {
+      details = el("details", "learning-sources");
+      details.appendChild(el("summary", null, `Material de referencia (${session.sources.length})`));
+      panel.appendChild(details);
+    }
+    const link = el("a", "learning-source", `${source.kind === "web" ? "Web" : "KB"}: ${source.source}`);
+    link.href = source.url || "#";
+    link.target = source.url ? "_blank" : "_self";
+    link.rel = "noopener noreferrer";
+    link.id = `${citationPrefix}-src-${source.id}`;
+    link.addEventListener("click", (event) => {
+      if (!source.url) {
+        event.preventDefault();
+        details.open = true;
+      }
+    });
+    details.appendChild(link);
+  }
+  panel.querySelectorAll(".cite").forEach((citation) => {
+    citation.addEventListener("click", () => {
+      const target = document.getElementById(citation.dataset.target);
+      target?.closest("details")?.setAttribute("open", "");
+    }, true);
+  });
+}
+
+async function sendLearningAction(action, answer, button) {
+  if (!currentLearningSession) return;
+  const oldLabel = button?.textContent;
+  const panel = learningPanelEl;
+  panel?.querySelector(".learning-action-error")?.remove();
+  if (button) {
+    button.disabled = true;
+    button.textContent = action === "approve_plan" ? "Generando lección…" : "Procesando…";
+  }
+  setStatus("Procesando la acción de aprendizaje…", "warn");
+  try {
+    const response = await fetch(`/learning-sessions/${encodeURIComponent(currentLearningSession.id)}/actions`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, answer }),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      const message = payload.detail || `Error ${response.status}`;
+      setStatus(message, "err");
+      if (panel) {
+        const error = el("div", "learning-action-error", message);
+        error.setAttribute("role", "alert");
+        panel.prepend(error);
+      }
+      return;
+    }
+    currentLearningSession = await response.json();
+    renderLearningSession(currentLearningSession);
+    syncLearningComposer();
+    setStatus("Sesión actualizada.", "ok");
+    await loadConversations();
+    scrollDown();
+  } catch (error) {
+    const message = `No se pudo completar la acción: ${error.message || error}`;
+    setStatus(message, "err");
+    if (panel) {
+      const notice = el("div", "learning-action-error", message);
+      notice.setAttribute("role", "alert");
+      panel.prepend(notice);
+    }
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = oldLabel;
+    }
+  }
+}
+
+function setPedagogicalMode(mode) {
+  selectedPedagogicalMode = mode;
+  document.querySelectorAll(".mode-chip").forEach((button) => {
+    const active = button.dataset.mode === mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-checked", String(active));
+  });
+  document.querySelector(".chat")?.classList.toggle("is-learning", mode === "learn");
+  renderLearningSession(currentLearningSession);
+  syncLearningComposer();
+}
+
+async function restoreLearningSession(conversationId) {
+  if (!conversationId) return null;
+  try {
+    const response = await fetch(`/learning-sessions/by-conversation/${encodeURIComponent(conversationId)}`);
+    if (response.ok) return await response.json();
+  } catch { /* el modo de chat sigue disponible si el servicio no responde */ }
+  return null;
+}
+
+function addUserMessage(text, target = messagesEl) {
   $("empty-hint")?.remove();
-  messagesEl.appendChild(el("div", "msg user", text));
+  target.appendChild(el("div", "msg user", text));
   scrollDown();
 }
 
@@ -564,6 +820,10 @@ async function readSSE(response, onEvent) {
 }
 
 async function ask(question, topK) {
+  if (selectedPedagogicalMode === "learn" && currentLearningSession?.quiz) {
+    setStatus("Respondé usando una de las opciones del quiz en la tarjeta de Aprender.", "warn");
+    return;
+  }
   const msgId = `m${++counter}`;
   const bubble = el("div", "msg bot");
   const textEl = el("div", "msg-text streaming");
@@ -610,6 +870,59 @@ async function ask(question, topK) {
         const createdConv = await convResp.json();
         activeConversationId = createdConv.id;
       }
+    }
+
+    if (selectedPedagogicalMode === "learn") {
+      if (!activeConversationId) return fail("Aprender requiere una conversación persistente; desactivá el modo solo lectura para iniciar una.");
+      if (!currentLearningSession) {
+        const response = await fetch("/learning-sessions", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conversation_id: activeConversationId, goal: question, strict_mode: isStrictMode }),
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          if (response.status === 409) {
+            const existing = await restoreLearningSession(activeConversationId);
+            if (existing) {
+              currentLearningSession = existing;
+              bubble.remove();
+              const lastUserBubble = [...messagesEl.querySelectorAll(".msg.user")].at(-1);
+              if (lastUserBubble?.textContent === question) lastUserBubble.remove();
+              if (currentConversationMessages.at(-1)?.role === "user") currentConversationMessages.pop();
+              renderLearningSession(existing);
+              syncLearningComposer();
+              setStatus("Esta conversación ya tiene una sesión. La restauré para que puedas continuar.", "ok");
+              scrollDown();
+              return;
+            }
+          }
+          return fail(payload.detail || `Error ${response.status}`);
+        }
+        currentLearningSession = await response.json();
+      } else {
+        const action = currentLearningSession.state === "plan_pending"
+          ? "revise_plan"
+          : currentLearningSession.quiz?.kind === "diagnostic"
+            ? "answer_diagnostic"
+            : currentLearningSession.quiz
+              ? "answer_quiz"
+              : "check";
+        const response = await fetch(`/learning-sessions/${encodeURIComponent(currentLearningSession.id)}/actions`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, answer: question }),
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          return fail(payload.detail || `Error ${response.status}`);
+        }
+        currentLearningSession = await response.json();
+      }
+      bubble.remove();
+      renderLearningSession(currentLearningSession);
+      syncLearningComposer();
+      scrollDown();
+      await loadConversations();
+      return;
     }
 
     const body = {
@@ -719,8 +1032,9 @@ form.addEventListener("submit", async (ev) => {
   currentConversationMessages.push({ role: "user", content: question });
   await ask(question, Number.isInteger(k) ? k : null);
   askBtn.disabled = false;
+  syncLearningComposer();
   if (downloadBtn) downloadBtn.disabled = currentConversationMessages.length === 0;
-  questionEl.focus();
+  if (!questionEl.disabled) questionEl.focus();
 });
 
 downloadBtn?.addEventListener("click", () => {
@@ -971,17 +1285,56 @@ questionEl.focus();
 
 // Controles del Modo Pedagógico y Modo Estricto
 document.querySelectorAll(".mode-chip").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".mode-chip").forEach((b) => {
-      b.classList.remove("active");
-      b.setAttribute("aria-checked", "false");
-    });
-    btn.classList.add("active");
-    btn.setAttribute("aria-checked", "true");
-    selectedPedagogicalMode = btn.dataset.mode || "auto";
+  btn.addEventListener("click", async () => {
+    const mode = btn.dataset.mode || "auto";
+    setPedagogicalMode(mode);
+    if (mode === "learn" && activeConversationId && !currentLearningSession) {
+      setStatus("Buscando una sesión de aprendizaje guardada…", "warn");
+      currentLearningSession = await restoreLearningSession(activeConversationId);
+      renderLearningSession(currentLearningSession);
+      syncLearningComposer();
+      setStatus(currentLearningSession ? "Sesión restaurada." : "Escribí un tema para iniciar una sesión.", currentLearningSession ? "ok" : "");
+    }
+    if (mode === "learn") scrollDown();
   });
 });
+document.querySelector(".chat")?.classList.toggle("is-learning", selectedPedagogicalMode === "learn");
+syncLearningComposer();
 
 $("strict-mode-toggle")?.addEventListener("change", (e) => {
   isStrictMode = Boolean(e.target.checked);
 });
+
+function syncLearningComposer() {
+  const hasPendingQuiz = Boolean(currentLearningSession?.quiz);
+  const state = currentLearningSession?.state;
+  const composerBlocked = selectedPedagogicalMode === "learn" && (
+    hasPendingQuiz || ["awaiting_web_consent", "awaiting_advance", "paused", "completed", "blocked"].includes(state)
+  );
+  questionEl.disabled = composerBlocked;
+  askBtn.disabled = composerBlocked;
+  if (selectedPedagogicalMode === "learn") {
+    if (hasPendingQuiz) {
+      questionEl.placeholder = "Elegí una respuesta en la tarjeta de la sesión…";
+      askBtn.textContent = "Respondé el quiz arriba";
+    } else if (["awaiting_advance", "awaiting_web_consent"].includes(state)) {
+      questionEl.placeholder = "Usá la acción disponible en la tarjeta de la sesión…";
+      askBtn.textContent = "Continuar desde la sesión";
+    } else if (["paused", "completed", "blocked"].includes(state)) {
+      questionEl.placeholder = "Retomá o iniciá otra sesión para continuar…";
+      askBtn.textContent = "Sesión detenida";
+    } else if (state === "plan_pending") {
+      questionEl.placeholder = "¿Querés cambiar algo del plan? Escribí el ajuste…";
+      askBtn.textContent = "Pedir ajuste al plan";
+    } else if (state) {
+      questionEl.placeholder = "Compartí tu procedimiento para recibir orientación…";
+      askBtn.textContent = "Pedir orientación";
+    } else {
+      questionEl.placeholder = "Escribí el tema que querés aprender…";
+      askBtn.textContent = "Empezar a aprender";
+    }
+  } else {
+    questionEl.placeholder = "Escribí tu pregunta (Enter para enviar, Shift+Enter para salto de línea)";
+    askBtn.textContent = "Preguntar";
+  }
+}

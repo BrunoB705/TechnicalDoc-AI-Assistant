@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import conversations, documents, health, knowledge_bases, query, ui
+from app.api.routes import conversations, documents, health, knowledge_bases, learning, query, ui
 from app.exceptions import (
     ConversationNotFoundError,
     DocumentNotFoundError,
@@ -15,7 +15,9 @@ from app.exceptions import (
     InvalidConversationError,
     InvalidDocumentError,
     InvalidKnowledgeBaseError,
+    InvalidLearningActionError,
     KnowledgeBaseNotFoundError,
+    LearningSessionNotFoundError,
     LLMUnavailableError,
     RateLimitExceededError,
     ReadOnlyModeError,
@@ -27,6 +29,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="TechnicalDoc AI Assistant", version="1.0.0")
     app.include_router(health.router)
     app.include_router(query.router)
+    app.include_router(learning.router)
     app.include_router(knowledge_bases.router)
     app.include_router(documents.router)
     app.include_router(conversations.router)
@@ -59,6 +62,8 @@ def create_app() -> FastAPI:
     _register(InvalidConversationError, 422, "invalid_conversation")
     _register(ReadOnlyModeError, 403, "read_only_mode")
     _register(RateLimitExceededError, 429, "rate_limit_exceeded")
+    _register(LearningSessionNotFoundError, 404, "learning_session_not_found")
+    _register(InvalidLearningActionError, 422, "invalid_learning_action")
 
     return app
 

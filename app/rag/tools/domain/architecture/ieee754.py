@@ -1,4 +1,5 @@
 import math
+from fractions import Fraction
 from typing import Any
 
 from app.rag.tools.base import BaseTool, ToolResult
@@ -26,6 +27,18 @@ FORMAT_PRESETS = {
         "name": "Doble Precisión (64 bits)",
     },
 }
+
+
+def _scale_power_of_two(value: Fraction, exponent: int) -> Fraction:
+    return value * (2**exponent) if exponent >= 0 else value / (2 ** (-exponent))
+
+
+def _round_ties_to_even(value: Fraction) -> int:
+    quotient, remainder = divmod(value.numerator, value.denominator)
+    comparison = 2 * remainder - value.denominator
+    if comparison > 0 or (comparison == 0 and quotient % 2):
+        return quotient + 1
+    return quotient
 
 
 class IEEE754Tool(BaseTool):
@@ -174,10 +187,15 @@ class IEEE754Tool(BaseTool):
             )
 
         abs_val = abs(val_float)
+        try:
+            exact_abs = abs(Fraction(str(value)))
+        except (ValueError, ZeroDivisionError):
+            exact_abs = Fraction.from_float(abs_val)
 
-        # 5. Descomposición con math.frexp para evitar underflow artificial
-        m, e = math.frexp(abs_val)
-        true_exp = e - 1
+        # Redondeamos directamente al formato destino con roundTiesToEven.
+        true_exp = exact_abs.numerator.bit_length() - exact_abs.denominator.bit_length()
+        if _scale_power_of_two(exact_abs, -true_exp) < 1:
+            true_exp -= 1
         biased_exp = true_exp + b_val
         max_exp = (1 << e_bits) - 1
 
@@ -188,31 +206,33 @@ class IEEE754Tool(BaseTool):
             norm_str = "Infinito (overflow de exponente)"
         elif biased_exp <= 0:
             # Número subnormal
-            biased_exp = 0
-            exp_bin = "0" * e_bits
-            # En subnormales: val = 0.F * 2^(1 - bias)
-            curr = abs_val * (2.0 ** (b_val - 1))
-            frac_bits_list = []
-            for _ in range(f_bits):
-                curr *= 2.0
-                bit = int(curr)
-                frac_bits_list.append(str(min(bit, 1)))
-                curr -= bit
-            combined_frac = "".join(frac_bits_list)
-            norm_str = f"0.{combined_frac} * 2^{1 - b_val} (Subnormal)"
+            subnormal = _round_ties_to_even(_scale_power_of_two(exact_abs, b_val - 1 + f_bits))
+            if subnormal >= (1 << f_bits):
+                biased_exp = 1
+                exp_bin = bin(biased_exp)[2:].zfill(e_bits)
+                combined_frac = "0" * f_bits
+                norm_str = f"1.{'0' * f_bits} * 2^{1 - b_val} (redondeado a normal)"
+            else:
+                biased_exp = 0
+                exp_bin = "0" * e_bits
+                combined_frac = bin(subnormal)[2:].zfill(f_bits)
+                norm_str = f"0.{combined_frac} * 2^{1 - b_val} (Subnormal)"
         else:
             # Número normalizado
-            exp_bin = bin(biased_exp)[2:].zfill(e_bits)
-            frac_part = 2.0 * m - 1.0  # mantisa fraccionaria sin el bit implícito 1
-            frac_bits_list = []
-            curr = frac_part
-            for _ in range(f_bits):
-                curr *= 2.0
-                bit = int(curr)
-                frac_bits_list.append(str(min(bit, 1)))
-                curr -= bit
-            combined_frac = "".join(frac_bits_list)
-            norm_str = f"1.{combined_frac} * 2^{true_exp}"
+            normalized = _scale_power_of_two(exact_abs, -true_exp)
+            fraction = _round_ties_to_even((normalized - 1) * (1 << f_bits))
+            if fraction >= (1 << f_bits):
+                fraction = 0
+                true_exp += 1
+                biased_exp += 1
+            if biased_exp >= max_exp:
+                exp_bin = "1" * e_bits
+                combined_frac = "0" * f_bits
+                norm_str = "Infinito (overflow tras redondeo)"
+            else:
+                exp_bin = bin(biased_exp)[2:].zfill(e_bits)
+                combined_frac = bin(fraction)[2:].zfill(f_bits)
+                norm_str = f"1.{combined_frac} * 2^{true_exp}"
 
         full_raw_bin = f"{sign_bin}{exp_bin}{combined_frac}"
         full_bin = f"{sign_bin} {exp_bin} {combined_frac}"

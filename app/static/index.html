@@ -4,8 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TechnicalDoc AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=8">
+  <link rel="stylesheet" href="/static/style.css?v=14">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -36,6 +37,7 @@
       </div>
       <div id="messages" class="messages" aria-live="polite">
         <div class="empty" id="empty-hint">Hacé una pregunta sobre los documentos de la base seleccionada.</div>
+        <section id="learning-panel" class="learning-panel" aria-live="polite" hidden></section>
       </div>
       <div class="professor-toolbar">
         <div class="mode-chips" role="radiogroup" aria-label="Modo del profesor">
@@ -44,6 +46,7 @@
           <button type="button" class="mode-chip" role="radio" aria-checked="false" data-mode="solve" title="Resolución guiada paso a paso">🧮 Resolver</button>
           <button type="button" class="mode-chip" role="radio" aria-checked="false" data-mode="hint" title="Pista progresiva sin revelar la respuesta completa">💡 Pistas</button>
           <button type="button" class="mode-chip" role="radio" aria-checked="false" data-mode="check" title="Diagnóstico de errores en tu resolución">✏️ Corregir</button>
+          <button type="button" class="mode-chip" role="radio" aria-checked="false" data-mode="learn" title="Sesión de aprendizaje guiada y persistente">🎓 Aprender</button>
         </div>
         <label class="strict-toggle" title="Modo estricto: responder únicamente con premisas explícitas de la base de conocimiento">
           <input type="checkbox" id="strict-mode-toggle">
@@ -122,6 +125,7 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked-katex-extension/lib/index.umd.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
-  <script src="/static/app.js?v=9"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script src="/static/app.js?v=18"></script>
 </body>
 </html>

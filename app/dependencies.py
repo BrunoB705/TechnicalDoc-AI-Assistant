@@ -7,6 +7,7 @@ from app.config import get_settings
 from app.conversations.service import ConversationService
 from app.documents.service import DocumentService
 from app.knowledge_bases.service import KnowledgeBaseService
+from app.learning.service import LearningService
 from app.rag.embeddings import get_embeddings
 from app.rag.llm import get_llm
 from app.rag.service import RAGService
@@ -56,3 +57,9 @@ def get_document_service() -> DocumentService:
 def get_conversation_service() -> ConversationService:
     settings = get_settings()
     return ConversationService(settings)
+
+
+@lru_cache
+def get_learning_service() -> LearningService:
+    settings = get_settings()
+    return LearningService(settings, get_rag_service(), get_conversation_service())

@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     enable_professor: bool = True
     default_pedagogical_mode: Literal["auto", "explain", "solve", "hint", "check"] = "auto"
     default_strict_mode: bool = False
+    tavily_api_key: SecretStr | None = None
 
 
 @lru_cache

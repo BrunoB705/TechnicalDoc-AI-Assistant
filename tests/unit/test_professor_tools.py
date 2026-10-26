@@ -110,6 +110,25 @@ def test_ieee754_half_precision_137():
     assert d["hex"] == "0x5848"
 
 
+def test_ieee754_binary16_rounds_ties_to_even():
+    tool = IEEE754Tool()
+    even = tool.run("1.00048828125", format_name="binary16")
+    odd = tool.run("1.00146484375", format_name="binary16")
+    assert even.data["hex"] == "0x3C00"
+    assert odd.data["hex"] == "0x3C02"
+
+
+def test_ieee754_binary16_rounds_subnormal_and_overflow_boundaries():
+    tool = IEEE754Tool()
+    half_min_subnormal = tool.run("0.0000000298023223876953125", format_name="binary16")
+    above_half_min_subnormal = tool.run("0.00000002980232238769532", format_name="binary16")
+    just_above_max_finite = tool.run("65520", format_name="binary16")
+    assert half_min_subnormal.data["hex"] == "0x0000"
+    assert above_half_min_subnormal.data["hex"] == "0x0001"
+    assert just_above_max_finite.data["exponent_bin"] == "11111"
+    assert just_above_max_finite.data["fraction_bin"] == "0" * 10
+
+
 def test_ieee754_single_precision_137():
     """Verifica 137 en Precisión Simple (binary32)."""
     tool = IEEE754Tool()
@@ -200,7 +219,8 @@ def test_ieee754_small_float_no_collapse():
     assert res.success is True
     # 1e-15 nunca debe colapsar a exponente 126 (0.5)
     assert res.data["biased_exponent"] < 120
-    assert res.data["hex"] == "0x26901D7C"
+    # IEEE 754 round-to-nearest, ties-to-even (rather than truncating the fraction).
+    assert res.data["hex"] == "0x26901D7D"
 
 
 def test_ieee754_invalid_value():

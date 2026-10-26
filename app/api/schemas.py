@@ -18,6 +18,49 @@ class QueryRequest(BaseModel):
     )
 
 
+class LearningStartRequest(BaseModel):
+    conversation_id: str = Field(min_length=1, max_length=64)
+    goal: str = Field(min_length=3, max_length=500)
+    strict_mode: bool = False
+
+
+class LearningActionRequest(BaseModel):
+    action: Literal[
+        "answer_diagnostic",
+        "approve_plan",
+        "revise_plan",
+        "answer_quiz",
+        "advance",
+        "hint",
+        "check",
+        "solve",
+        "pause",
+        "resume",
+        "approve_web",
+        "decline_web",
+        "finish",
+    ]
+    answer: str | None = Field(default=None, max_length=2000)
+
+
+class LearningSessionResponse(BaseModel):
+    id: str
+    conversation_id: str
+    knowledge_base_id: str
+    goal: str
+    state: str
+    previous_state: str | None = None
+    strict_mode: bool
+    current_node_index: int = 0
+    score: float | None = None
+    content: str = ""
+    plan: dict[str, Any] | None = None
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    quiz: dict[str, Any] | None = None
+    feedback: dict[str, Any] | None = None
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class Source(BaseModel):
     id: int
     source: str
