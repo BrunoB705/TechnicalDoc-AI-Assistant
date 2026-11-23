@@ -1,7 +1,9 @@
 from functools import lru_cache
+from typing import Literal
 
 from langchain_chroma import Chroma
 from langchain_core.embeddings import Embeddings
+from langchain_core.language_models import BaseChatModel
 
 from app.config import get_settings
 from app.conversations.service import ConversationService
@@ -32,6 +34,11 @@ def get_knowledge_base_service() -> KnowledgeBaseService:
 
 
 @lru_cache
+def get_llm_for_profile(profile: Literal["local", "opencode"]) -> BaseChatModel:
+    return get_llm(get_settings(), profile=profile)
+
+
+@lru_cache
 def get_rag_service() -> RAGService:
     settings = get_settings()
     kb_svc = get_knowledge_base_service()
@@ -42,6 +49,7 @@ def get_rag_service() -> RAGService:
         settings,
         kb_service=kb_svc,
         conversation_service=conv_svc,
+        llm_resolver=get_llm_for_profile,
     )
 
 

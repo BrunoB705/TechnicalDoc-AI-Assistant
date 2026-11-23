@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"
+    opencode_api_key: SecretStr | None = None
+    opencode_base_url: str = "https://opencode.ai/zen/go/v1"
+    opencode_model: str = "deepseek-v4.1-flash"
+    default_llm_profile: Literal["local", "opencode"] = "local"
     llm_timeout: float = 120.0  # segundos
     max_output_tokens: int = 1024
 

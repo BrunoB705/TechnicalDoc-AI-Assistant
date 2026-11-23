@@ -16,6 +16,10 @@ class QueryRequest(BaseModel):
         default=None,
         description="Modo estricto: requiere premisas explícitas en la base de conocimiento",
     )
+    llm_profile: Literal["local", "opencode"] | None = Field(
+        default=None,
+        description="Perfil de LLM a utilizar: local u opencode",
+    )
 
 
 class Source(BaseModel):

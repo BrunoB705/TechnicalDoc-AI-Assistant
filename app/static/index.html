@@ -45,10 +45,16 @@
           <button type="button" class="mode-chip" role="radio" aria-checked="false" data-mode="hint" title="Pista progresiva sin revelar la respuesta completa">💡 Pistas</button>
           <button type="button" class="mode-chip" role="radio" aria-checked="false" data-mode="check" title="Diagnóstico de errores en tu resolución">✏️ Corregir</button>
         </div>
-        <label class="strict-toggle" title="Modo estricto: responder únicamente con premisas explícitas de la base de conocimiento">
-          <input type="checkbox" id="strict-mode-toggle">
-          <span>🔒 Modo Estricto</span>
-        </label>
+        <div class="toolbar-right">
+          <div class="llm-switch" role="radiogroup" aria-label="Proveedor LLM">
+            <button type="button" class="llm-chip active" role="radio" aria-checked="true" data-llm="local" title="Usar modelo local configurado">🖥️ Local</button>
+            <button type="button" class="llm-chip" role="radio" aria-checked="false" data-llm="opencode" title="Usar OpenCode Go (API Key)">☁️ OpenCode Go</button>
+          </div>
+          <label class="strict-toggle" title="Modo estricto: responder únicamente con premisas explícitas de la base de conocimiento">
+            <input type="checkbox" id="strict-mode-toggle">
+            <span>🔒 Modo Estricto</span>
+          </label>
+        </div>
       </div>
       <form id="ask-form" class="ask-form">
         <textarea id="question" rows="2" minlength="3" maxlength="1000" required

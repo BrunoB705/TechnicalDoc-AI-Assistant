@@ -7,8 +7,10 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.schemas import ErrorResponse, QueryRequest, QueryResponse
+from app.config import Settings, get_settings
 from app.dependencies import get_rag_service
 from app.exceptions import RateLimitExceededError
+from app.rag.llm import is_opencode_configured
 from app.rag.service import MESSAGES, RAGService
 
 router = APIRouter()
@@ -75,6 +77,7 @@ def query(req: QueryRequest, service: RAGService = Depends(get_rag_service)) -> 
         conversation_id=req.conversation_id,
         pedagogical_mode=req.pedagogical_mode,
         strict_mode=req.strict_mode,
+        llm_profile=req.llm_profile,
     )
     msg = None if result.grounded else (result.message or MESSAGES.get(result.reason or ""))
     return QueryResponse(
@@ -124,6 +127,7 @@ async def query_stream(
             conversation_id=req.conversation_id,
             pedagogical_mode=req.pedagogical_mode,
             strict_mode=req.strict_mode,
+            llm_profile=req.llm_profile,
         ):
             if await request.is_disconnected():
                 break
@@ -132,3 +136,11 @@ async def query_stream(
             yield f"event: {event}\ndata: {data}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/llm/profiles")
+def llm_profiles(settings: Settings = Depends(get_settings)) -> dict:
+    return {
+        "default": settings.default_llm_profile,
+        "opencode_configured": is_opencode_configured(settings),
+    }

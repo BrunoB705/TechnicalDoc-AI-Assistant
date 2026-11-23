@@ -3,9 +3,9 @@
   --accent: #4f9cf9; --ok: #3fb97f; --warn: #e5a93d; --err: #e5604d;
 }
 * { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
 body { background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif;
-  display: flex; flex-direction: column; }
+  display: flex; flex-direction: column; height: 100dvh; }
 .topbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
   gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--border); }
 .brand { display: flex; align-items: center; gap: 12px; }
@@ -19,8 +19,8 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 .badge-down { background: #3d1f1a; color: var(--err); }
 .badge-unknown { background: var(--border); color: var(--muted); }
 
-.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr; gap: 16px; padding: 16px; }
-@media (max-width: 800px) { .layout { grid-template-columns: 1fr; overflow-y: auto; } }
+.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr; grid-template-rows: minmax(0, 1fr); gap: 16px; padding: 16px; overflow: hidden; }
+@media (max-width: 800px) { .layout { grid-template-columns: 1fr; grid-template-rows: auto; overflow-y: auto; } }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   display: flex; flex-direction: column; min-height: 0; }
 
@@ -244,6 +244,42 @@ button.danger { background: transparent; color: var(--err); border: 1px solid va
   color: var(--accent);
   border-color: var(--accent);
   font-weight: 600;
+}
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.llm-switch {
+  display: inline-flex;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 2px;
+  gap: 2px;
+}
+.llm-chip {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-radius: 12px;
+  padding: 2px 9px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.llm-chip:hover:not(:disabled) {
+  color: var(--text);
+}
+.llm-chip.active {
+  background: rgba(56, 189, 248, 0.15);
+  color: var(--accent);
+  font-weight: 600;
+}
+.llm-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .strict-toggle {
   display: flex;

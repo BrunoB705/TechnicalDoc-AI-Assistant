@@ -19,6 +19,8 @@ let latestAnswer = "";
 let latestQuestion = "";
 let selectedPedagogicalMode = "auto";
 let isStrictMode = false;
+let selectedLlmProfile = "local";
+let llmProfileInitialized = false;
 
 // Configuración de Markdown (Marked) y fórmulas (KaTeX)
 if (typeof marked !== "undefined") {
@@ -41,6 +43,36 @@ function el(tag, className, text) {
 
 function scrollDown() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function focusCitationTarget(targetId) {
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  const details = target.closest("details");
+  if (details) details.open = true;
+  target.scrollIntoView({ block: "nearest" });
+  target.classList.add("flash");
+  setTimeout(() => target.classList.remove("flash"), 1200);
+}
+
+function appendSourcesDetails(extra, cited, retrieved, msgId) {
+  if (cited.length) {
+    const det = el("details", "retrieved");
+    det.appendChild(el("summary", null, `Fuentes citadas (${cited.length})`));
+    const box = el("div", "sources");
+    cited.forEach((s) => box.appendChild(sourceNode(s, msgId)));
+    det.appendChild(box);
+    extra.appendChild(det);
+  }
+  const others = retrieved.filter((r) => !cited.some((c) => c.id === r.id));
+  if (others.length) {
+    const det = el("details", "retrieved");
+    det.appendChild(el("summary", null, `Otros fragmentos recuperados (${others.length})`));
+    const box = el("div", "sources");
+    others.forEach((s) => box.appendChild(sourceNode(s, msgId)));
+    det.appendChild(box);
+    extra.appendChild(det);
+  }
 }
 
 /** Recorre los nodos de texto de un elemento renderizado y reemplaza [n] por chips clicables. */
@@ -78,13 +110,7 @@ function transformCitationsInDom(root, msgId) {
       if (m) {
         const chip = el("span", "cite", part);
         chip.dataset.target = `${msgId}-src-${m[1]}`;
-        chip.addEventListener("click", () => {
-          const target = document.getElementById(chip.dataset.target);
-          if (!target) return;
-          target.scrollIntoView({ block: "nearest" });
-          target.classList.add("flash");
-          setTimeout(() => target.classList.remove("flash"), 1200);
-        });
+        chip.addEventListener("click", () => focusCitationTarget(chip.dataset.target));
         frag.appendChild(chip);
       } else if (part) {
         frag.appendChild(document.createTextNode(part));
@@ -102,13 +128,7 @@ function renderWithCitationsFallback(container, text, msgId) {
     if (m) {
       const chip = el("span", "cite", part);
       chip.dataset.target = `${msgId}-src-${m[1]}`;
-      chip.addEventListener("click", () => {
-        const target = document.getElementById(chip.dataset.target);
-        if (!target) return;
-        target.scrollIntoView({ block: "nearest" });
-        target.classList.add("flash");
-        setTimeout(() => target.classList.remove("flash"), 1200);
-      });
+      chip.addEventListener("click", () => focusCitationTarget(chip.dataset.target));
       container.appendChild(chip);
     } else if (part) {
       container.appendChild(document.createTextNode(part));
@@ -228,6 +248,28 @@ async function checkHealth() {
     const body = r.ok ? await r.json() : {};
     const ok = r.ok && body.status === "ok";
     readOnlyMode = Boolean(body.read_only_mode);
+    try {
+      const pr = await fetch("/llm/profiles");
+      if (pr.ok) {
+        const pdata = await pr.json();
+        const opencodeConfigured = Boolean(pdata.opencode_configured);
+        const opencodeBtn = document.querySelector('.llm-chip[data-llm="opencode"]');
+        if (opencodeBtn) {
+          opencodeBtn.disabled = !opencodeConfigured;
+          opencodeBtn.title = opencodeConfigured
+            ? "Usar OpenCode Go (API Key)"
+            : "Configurá OPENCODE_API_KEY en .env para habilitar OpenCode Go";
+        }
+        if (!llmProfileInitialized) {
+          const initialProfile =
+            pdata.default === "opencode" && opencodeConfigured ? "opencode" : "local";
+          setActiveLlmProfile(initialProfile);
+          llmProfileInitialized = true;
+        }
+      }
+    } catch {
+      // Si falla la consulta de perfiles, se mantiene el perfil local por defecto
+    }
     badge.className = `badge ${ok ? "badge-ok" : "badge-down"}`;
     badge.textContent = ok ? (readOnlyMode ? "online · solo lectura" : "online") : "error";
     $("new-kb-btn").disabled = readOnlyMode || isRetraining;
@@ -425,21 +467,8 @@ function renderHistoricalBotMessage(m) {
   }
 
   const cited = m.sources || [];
-  if (cited.length) {
-    const box = el("div", "sources");
-    cited.forEach((s) => box.appendChild(sourceNode(s, msgId)));
-    extra.appendChild(box);
-  }
   const retrieved = m.retrieved || [];
-  const others = retrieved.filter((r) => !cited.some((c) => c.id === r.id));
-  if (others.length) {
-    const det = el("details", "retrieved");
-    det.appendChild(el("summary", null, `Otros fragmentos recuperados (${others.length})`));
-    const box = el("div", "sources");
-    others.forEach((s) => box.appendChild(sourceNode(s, msgId)));
-    det.appendChild(box);
-    extra.appendChild(det);
-  }
+  appendSourcesDetails(extra, cited, retrieved, msgId);
   const kbId = m.knowledge_base_id || "general";
   let metaInfo = `KB: ${kbId}`;
   if (m.pedagogical_mode && m.pedagogical_mode !== "auto") {
@@ -617,6 +646,7 @@ async function ask(question, topK) {
       knowledge_base_id: kbSnapshot,
       pedagogical_mode: selectedPedagogicalMode,
       strict_mode: isStrictMode,
+      llm_profile: selectedLlmProfile,
     };
     if (topK) body.top_k = topK;
     if (activeConversationId) body.conversation_id = activeConversationId;
@@ -666,20 +696,7 @@ async function ask(question, topK) {
         }
         currentConversationMessages.push({ role: "bot", content: botText });
         const cited = data.sources || [];
-        if (cited.length) {
-          const box = el("div", "sources");
-          cited.forEach((s) => box.appendChild(sourceNode(s, msgId)));
-          extra.appendChild(box);
-        }
-        const others = retrieved.filter((r) => !cited.some((c) => c.id === r.id));
-        if (others.length) {
-          const det = el("details", "retrieved");
-          det.appendChild(el("summary", null, `Otros fragmentos recuperados (${others.length})`));
-          const box = el("div", "sources");
-          others.forEach((s) => box.appendChild(sourceNode(s, msgId)));
-          det.appendChild(box);
-          extra.appendChild(det);
-        }
+        appendSourcesDetails(extra, cited, retrieved, msgId);
         const secs = ((performance.now() - started) / 1000).toFixed(1);
         let metaText = `${secs} s · KB: ${kbSnapshot}`;
         if (data.pedagogical_mode && data.pedagogical_mode !== "auto") {
@@ -984,4 +1001,20 @@ document.querySelectorAll(".mode-chip").forEach((btn) => {
 
 $("strict-mode-toggle")?.addEventListener("change", (e) => {
   isStrictMode = Boolean(e.target.checked);
+});
+
+function setActiveLlmProfile(profile) {
+  selectedLlmProfile = profile;
+  document.querySelectorAll(".llm-chip").forEach((btn) => {
+    const active = btn.dataset.llm === profile;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-checked", active ? "true" : "false");
+  });
+}
+
+document.querySelectorAll(".llm-chip").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    setActiveLlmProfile(btn.dataset.llm || "local");
+  });
 });

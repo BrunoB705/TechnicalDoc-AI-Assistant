@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -34,6 +34,7 @@ logger = logging.getLogger("rag")
 _LLM_CONNECTION_ERRORS = (
     openai.APIConnectionError,
     openai.APITimeoutError,
+    openai.APIStatusError,
     httpx.ConnectError,
     httpx.TimeoutException,
     ConnectionError,
@@ -112,6 +113,7 @@ class RAGService:
         kb_service: KnowledgeBaseService | None = None,
         conversation_service: ConversationService | None = None,
         tool_registry: ToolRegistry | None = None,
+        llm_resolver: Callable[[str], BaseChatModel] | None = None,
     ):
         self.vs = vectorstore
         self.llm = llm
@@ -119,12 +121,21 @@ class RAGService:
         self.kb_service = kb_service
         self.conversation_service = conversation_service or ConversationService(settings)
         self.tool_registry = tool_registry or get_default_registry()
+        self._llm_resolver = llm_resolver
 
-    def _condense_question(self, history: list[tuple[str, str]], question: str) -> str:
+    def _resolve_llm(self, llm_profile: str | None) -> BaseChatModel:
+        if llm_profile is None or self._llm_resolver is None:
+            return self.llm
+        return self._llm_resolver(llm_profile)
+
+    def _condense_question(
+        self, history: list[tuple[str, str]], question: str, llm: BaseChatModel | None = None
+    ) -> str:
         if not history:
             return question
+        active_llm = llm or self.llm
         try:
-            msg = (CONDENSE_PROMPT | self.llm).invoke(
+            msg = (CONDENSE_PROMPT | active_llm).invoke(
                 {"history": format_history(history), "question": question}
             )
         except _LLM_CONNECTION_ERRORS as exc:
@@ -132,11 +143,14 @@ class RAGService:
             raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
         return str(msg.content).strip() or question
 
-    async def _acondense_question(self, history: list[tuple[str, str]], question: str) -> str:
+    async def _acondense_question(
+        self, history: list[tuple[str, str]], question: str, llm: BaseChatModel | None = None
+    ) -> str:
         if not history:
             return question
+        active_llm = llm or self.llm
         try:
-            msg = await (CONDENSE_PROMPT | self.llm).ainvoke(
+            msg = await (CONDENSE_PROMPT | active_llm).ainvoke(
                 {"history": format_history(history), "question": question}
             )
         except _LLM_CONNECTION_ERRORS as exc:
@@ -144,18 +158,22 @@ class RAGService:
             raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
         return str(msg.content).strip() or question
 
-    def _step_back_question(self, question: str) -> str:
+    def _step_back_question(self, question: str, llm: BaseChatModel | None = None) -> str:
+        active_llm = llm or self.llm
         try:
-            msg = (STEP_BACK_PROMPT | self.llm).invoke({"question": question})
+            msg = (STEP_BACK_PROMPT | active_llm).invoke({"question": question})
             text = str(msg.content).strip()
             return text or question
         except _LLM_CONNECTION_ERRORS as exc:
             logger.warning(json.dumps({"event": "step_back_error", "error": type(exc).__name__}))
             return question
 
-    async def _astep_back_question(self, question: str) -> str:
+    async def _astep_back_question(
+        self, question: str, llm: BaseChatModel | None = None
+    ) -> str:
+        active_llm = llm or self.llm
         try:
-            msg = await (STEP_BACK_PROMPT | self.llm).ainvoke({"question": question})
+            msg = await (STEP_BACK_PROMPT | active_llm).ainvoke({"question": question})
             text = str(msg.content).strip()
             return text or question
         except _LLM_CONNECTION_ERRORS as exc:
@@ -263,7 +281,9 @@ class RAGService:
         pedagogical_mode: str = "auto",
         strict_mode: bool = False,
         verification_hint: str | None = None,
+        llm: BaseChatModel | None = None,
     ) -> str:
+        active_llm = llm or self.llm
         try:
             if self.settings.enable_professor:
                 prompt_template = build_professor_prompt(
@@ -281,7 +301,7 @@ class RAGService:
             if history:
                 chain_input["history"] = format_history(history)
 
-            msg = (prompt_template | self.llm).invoke(chain_input)
+            msg = (prompt_template | active_llm).invoke(chain_input)
         except _LLM_CONNECTION_ERRORS as exc:
             logger.warning(json.dumps({"event": "llm_error", "error": type(exc).__name__}))
             raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
@@ -295,7 +315,9 @@ class RAGService:
         pedagogical_mode: str = "auto",
         strict_mode: bool = False,
         verification_hint: str | None = None,
+        llm: BaseChatModel | None = None,
     ) -> str:
+        active_llm = llm or self.llm
         try:
             if self.settings.enable_professor:
                 prompt_template = build_professor_prompt(
@@ -313,7 +335,7 @@ class RAGService:
             if history:
                 chain_input["history"] = format_history(history)
 
-            msg = await (prompt_template | self.llm).ainvoke(chain_input)
+            msg = await (prompt_template | active_llm).ainvoke(chain_input)
         except _LLM_CONNECTION_ERRORS as exc:
             logger.warning(json.dumps({"event": "llm_error", "error": type(exc).__name__}))
             raise LLMUnavailableError(_LLM_UNAVAILABLE_MSG) from exc
@@ -529,6 +551,7 @@ class RAGService:
         strict_mode: bool = False,
         verification_hint: str | None = None,
         tool_data: dict[str, Any] | None = None,
+        llm: BaseChatModel | None = None,
     ) -> QueryResult:
         """Política unificada de validación de citas, reintento guiado, abstención y logging."""
         if NO_EVIDENCE not in text and not extract_citations(text):
@@ -540,6 +563,7 @@ class RAGService:
                 pedagogical_mode=pedagogical_mode,
                 strict_mode=strict_mode,
                 verification_hint=verification_hint,
+                llm=llm,
             )
         return self._postprocess_generation(
             text,
@@ -571,6 +595,7 @@ class RAGService:
         strict_mode: bool = False,
         verification_hint: str | None = None,
         tool_data: dict[str, Any] | None = None,
+        llm: BaseChatModel | None = None,
     ) -> QueryResult:
         """Versión asíncrona no bloqueante de finalización para streaming SSE."""
         if NO_EVIDENCE not in text and not extract_citations(text):
@@ -582,6 +607,7 @@ class RAGService:
                 pedagogical_mode=pedagogical_mode,
                 strict_mode=strict_mode,
                 verification_hint=verification_hint,
+                llm=llm,
             )
         return self._postprocess_generation(
             text,
@@ -605,6 +631,7 @@ class RAGService:
         conversation_id: str | None = None,
         pedagogical_mode: str | None = None,
         strict_mode: bool | None = None,
+        llm_profile: str | None = None,
     ) -> QueryResult:
         resolved_mode = (
             pedagogical_mode
@@ -635,10 +662,11 @@ class RAGService:
             self._save_turn(conversation_id, question, result, kb_id)
             return result
 
-        search_query = self._condense_question(history, question)
+        active_llm = self._resolve_llm(llm_profile)
+        search_query = self._condense_question(history, question, llm=active_llm)
         step_back_query = None
         if self.settings.enable_step_back:
-            step_back_query = self._step_back_question(search_query)
+            step_back_query = self._step_back_question(search_query, llm=active_llm)
 
         hits, retrieved, retrieval_ms = self._retrieve(
             search_query, top_k, kb_id=kb_id, step_back_query=step_back_query
@@ -673,6 +701,7 @@ class RAGService:
             pedagogical_mode=resolved_mode,
             strict_mode=resolved_strict,
             verification_hint=verification_hint,
+            llm=active_llm,
         )
         result = self._finalize_generation(
             text,
@@ -689,6 +718,7 @@ class RAGService:
             strict_mode=resolved_strict,
             verification_hint=verification_hint,
             tool_data=tool_data,
+            llm=active_llm,
         )
         self._save_turn(conversation_id, question, result, kb_id)
         return result
@@ -739,6 +769,7 @@ class RAGService:
         conversation_id: str | None = None,
         pedagogical_mode: str | None = None,
         strict_mode: bool | None = None,
+        llm_profile: str | None = None,
     ) -> AsyncIterator[dict]:
         """Transmite la respuesta token a token como eventos Server-Sent Events (SSE).
 
@@ -783,7 +814,8 @@ class RAGService:
             return
 
         try:
-            search_query = await self._acondense_question(history, question)
+            active_llm = self._resolve_llm(llm_profile)
+            search_query = await self._acondense_question(history, question, llm=active_llm)
         except LLMUnavailableError as exc:
             self._log(question, 0, 0, 0, 0, "llm_unavailable", kb_id=kb_id)
             yield {"event": "error", "data": {"error": "llm_unavailable", "detail": str(exc)}}
@@ -791,7 +823,7 @@ class RAGService:
 
         step_back_query = None
         if self.settings.enable_step_back:
-            step_back_query = await self._astep_back_question(search_query)
+            step_back_query = await self._astep_back_question(search_query, llm=active_llm)
 
         hits, retrieved, retrieval_ms = self._retrieve(
             search_query, top_k, kb_id=kb_id, step_back_query=step_back_query
@@ -847,7 +879,7 @@ class RAGService:
         else:
             prompt_template = PROMPT
 
-        chain = prompt_template | self.llm
+        chain = prompt_template | active_llm
         chain_input: dict[str, Any] = {"context": context, "question": question}
         if history:
             chain_input["history"] = format_history(history)
@@ -895,6 +927,7 @@ class RAGService:
                 strict_mode=resolved_strict,
                 verification_hint=verification_hint,
                 tool_data=tool_data,
+                llm=active_llm,
             )
         except LLMUnavailableError as exc:
             self._log(
